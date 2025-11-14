@@ -1,5 +1,17 @@
 # Chorus: Secret Recovery with Ephemeral Client Committees
 
+## 📄 Artifact Material
+
+For the full constructions, formal definitions, and security proofs deferred from the main paper, please refer to the artifact material:
+
+**[chorus-artifact-material.pdf](./chorus-artifact-material.pdf)**
+
+---
+
+## 💻 Implementation & Benchmarking
+
+The sections below provide instructions for building, running, and benchmarking the Chorus implementation.
+
 ## 📦 Installation
 
 ```bash
