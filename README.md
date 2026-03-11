@@ -29,19 +29,15 @@ As a result:
 You will receive from the authors: an SSH key pair and the control VM's
 IP address.  Your local machine needs Python 3 and an SSH client.
 
-```bash
-# 1. Log in to the control VM (saves connection details for next time)
-python3 scripts/login.py
+| Step | Command | Est. time |
+|------|---------|-----------|
+| Log in to the control VM | `python3 scripts/login.py` | ~30 s |
+| Set up the compute VM (idempotent) | `python3 ~/chorus/scripts/setup_eval.py` | ~20 min |
+| Run all experiments | `python3 ~/chorus/scripts/run_experiment.py all` | ~3 h |
+| Tear down compute VM | `python3 ~/chorus/scripts/teardown.py` | ~1 min |
 
-# 2. Set up the compute VM (idempotent — safe to re-run)
-python3 ~/chorus/scripts/setup_eval.py
-
-# 3. Run experiments (interactive menu)
-python3 ~/chorus/scripts/run_experiment.py
-
-# 4. Tear down when done
-python3 ~/chorus/scripts/teardown.py
-```
+You can also run `run_experiment.py` without arguments for an
+interactive menu, or pass a single experiment ID (e.g. `table6`).
 
 All commands run inside a **GNU screen** session.  If you disconnect,
 experiments keep running.  Re-run `login.py` to reconnect.
@@ -51,32 +47,19 @@ experiments keep running.  Re-run `login.py` to reconnect.
 ## Experiments
 
 All parameters are read from `config.json` — nothing is hardcoded.
+Each experiment saves results to `results/<experiment_id>/<timestamp>/`.
 
-| # | ID | Paper Reference | What runs |
+| # | ID | Paper Reference | Est. time |
 |---|-----|-----------------|-----------|
-| 1 | `figure5` | Figure 5: saVSS vs cgVSS | NIVSS benchmarks (both VMs) |
-| 2 | `table9` | Table 9: Server per-epoch costs | Server benchmark only |
-| 3 | `table6` | Table 6: Client secret-recovery costs | Server + client benchmarks (network throttled) |
-| 4 | `table7` | Table 7: Committee-member costs | Server + client benchmarks (network throttled) |
-| 5 | `figure8` | Figure 8: Client cost breakdown | Server + client benchmarks (network throttled) |
-| 6 | `appendixA41` | Appendix A.4.1: DKG setup costs | Server + client benchmarks (network throttled) |
-| 7 | `table10` | Table 10: Parameter selection | Local computation (no benchmarks) |
+| 1 | `figure5` | Figure 5: saVSS vs cgVSS | ~2 h |
+| 2 | `table9` | Table 9: Server per-epoch costs | ~30 min |
+| 3 | `table6` | Table 6: Client secret-recovery costs | ~15 min* |
+| 4 | `table7` | Table 7: Committee-member costs | < 1 min* |
+| 5 | `figure8` | Figure 8: Client cost breakdown | < 1 min* |
+| 6 | `appendixA41` | Appendix A.4.1: DKG setup costs | < 1 min* |
+| 7 | `server_cost` | Server dollar-cost estimation | < 1 min* |
+| 8 | `table10` | Table 10: Parameter selection | < 1 min |
 
-`table9` only needs the server benchmark — no network server or
-throttling.  Experiments 3–6 additionally start a network server on the
-compute VM, apply bandwidth/RTT limits (75 Mbps, 280 ms RTT), and run
-the client benchmark over the throttled link.
-
-Each experiment saves results (logs, `.tex` files, plots) to its own
-timestamped directory under `results/<experiment_id>/`.
-
----
-
-## Tear Down
-
-```bash
-python3 ~/chorus/scripts/teardown.py
-```
-
-Deletes the compute VM to stop billing.  The control VM is managed by
-the authors.
+\* Experiments 3–7 share benchmark logs.  Once `table9` (server) and
+`table6` (server + client) have run, experiments 4–7 reuse those logs
+and finish in under a minute each.

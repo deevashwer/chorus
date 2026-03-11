@@ -21,6 +21,7 @@ import datetime
 import json
 import os
 import shlex
+import argparse
 import signal
 import subprocess
 import sys
@@ -210,11 +211,12 @@ def expected_duration_str(exp: dict, timings: dict) -> str:
 # ---------------------------------------------------------------------------
 
 _EXP_CONFIG_KEY = {
-    "table9":      "secret_recovery",
-    "table6":      "secret_recovery",
-    "table7":      "secret_recovery",
-    "figure8":     "secret_recovery",
-    "appendixA41": "secret_recovery",
+    "table9":       "secret_recovery",
+    "table6":       "secret_recovery",
+    "table7":       "secret_recovery",
+    "figure8":      "secret_recovery",
+    "appendixA41":  "secret_recovery",
+    "server_cost":  "secret_recovery",
 }
 
 
@@ -224,6 +226,7 @@ _SR_NEEDS_CLIENT = {
     "figure8": True,
     "table9": False,
     "appendixA41": True,
+    "server_cost": False,
 }
 
 
@@ -746,7 +749,8 @@ _SR_SCRIPTS = {
     "table7":      "generate_table7.py",
     "figure8":     "generate_figure8.py",
     "table9":      "generate_table9.py",
-    "appendixA41": "generate_appendixA41.py",
+    "appendixA41":  "generate_appendixA41.py",
+    "server_cost":  "generate_server_cost.py",
 }
 
 
@@ -861,6 +865,12 @@ EXPERIMENTS = [
         "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"],
         "run": make_sr_runner("appendixA41"),
     },
+    {
+        "id": "server_cost",
+        "description": "Server dollar-cost estimation (server benchmark only)",
+        "expected_minutes": CONFIG["experiments"]["server_cost"]["expected_minutes"],
+        "run": make_sr_runner("server_cost"),
+    },
     # -- Pure computation (no benchmarks) ------------------------------------
     {
         "id": "table10",
@@ -932,90 +942,34 @@ def print_menu(timings: dict):
     print()
 
 
-def main():
-    print()
-    print("=" * 62)
-    print("  Chorus Experiment Runner")
-    print("=" * 62)
-    print()
-    print("  This script runs benchmark experiments across the control")
-    print("  and compute VMs and saves results to results/.")
-    print()
-    print("  You are inside a screen session, so you can safely detach")
-    print("  (Ctrl-A D) while an experiment is running.  Re-run")
-    print("  login.py on your local machine to reconnect and check")
-    print("  progress.")
-    print()
-
-    project = gcp_project()
-    zone = gcp_zone()
-
-    # Check if another experiment is already running
+def _check_lock_or_exit():
     lock = check_lock()
-    if lock:
-        started = lock["started"]
-        exp_name = lock["experiment"]
-        expected = lock["expected_minutes"]
-        elapsed = ""
-        try:
-            t0 = datetime.datetime.fromisoformat(started)
-            mins = (datetime.datetime.now() - t0).total_seconds() / 60
-            elapsed = f" ({mins:.0f} min elapsed so far)"
-        except ValueError:
-            pass
-        print("-" * 62)
-        print()
-        print(f"  Another experiment is currently running:")
-        print(f"    Experiment:  {exp_name}")
-        print(f"    Started at:  {started}{elapsed}")
-        print(f"    Expected:    ~{expected} min total")
-        print()
-        print("  Please wait for it to finish, or check back later.")
-        print("  (If you're in the same screen session, scroll up to")
-        print("  see its live output.)")
-        print()
-        sys.exit(1)
-
-    timings = load_timings()
-    print_menu(timings)
-
-    try:
-        raw = input("  Select experiment number (or 'a' for all): ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        sys.exit("  Invalid selection.")
-
-    if raw == "0":
-        print("  Goodbye.")
+    if not lock:
         return
-
-    if raw in ("a", "all"):
-        acquire_lock("all", sum(e["expected_minutes"] for e in EXPERIMENTS))
-        try:
-            _run_all(project, zone, timings)
-        finally:
-            release_lock()
-        return
-
+    started = lock["started"]
+    exp_name = lock["experiment"]
+    expected = lock["expected_minutes"]
+    elapsed = ""
     try:
-        choice = int(raw)
+        t0 = datetime.datetime.fromisoformat(started)
+        mins = (datetime.datetime.now() - t0).total_seconds() / 60
+        elapsed = f" ({mins:.0f} min elapsed so far)"
     except ValueError:
-        sys.exit(f"  Invalid selection: {raw}")
+        pass
+    print("-" * 62)
+    print()
+    print(f"  Another experiment is currently running:")
+    print(f"    Experiment:  {exp_name}")
+    print(f"    Started at:  {started}{elapsed}")
+    print(f"    Expected:    ~{expected} min total")
+    print()
+    print("  Please wait for it to finish, or check back later.")
+    print()
+    sys.exit(1)
 
-    if choice < 1 or choice > len(EXPERIMENTS):
-        sys.exit(f"  Invalid selection: {choice}")
 
-    exp = EXPERIMENTS[choice - 1]
-
-    # Check whether log files already exist from a previous run
-    action = prompt_rerun(exp)
-    if action == "skip":
-        print("  Skipping — nothing changed.")
-        return
-
-    reuse_from = None
-    if action == "reuse":
-        reuse_from = find_existing_logs(exp["id"])
-
+def _run_single(project, zone, exp, reuse_from):
+    """Run a single experiment (lock, execute, report)."""
     print()
     if reuse_from:
         print(f"  Re-generating experiment: {exp['id']}  (reusing existing logs)")
@@ -1058,16 +1012,103 @@ def main():
     else:
         print(f"  Experiment '{exp['id']}' failed after {fmt_elapsed(duration)}.")
         print(f"  Check logs in: {exp_dir}")
-    print()
-    print("  What to do next:")
-    print()
-    print("  • Run another experiment:")
-    print("      python3 ~/chorus/scripts/run_experiment.py")
-    print()
-    print("  • When done with ALL experiments, tear down the compute VM:")
-    print("      python3 ~/chorus/scripts/teardown.py")
     print("=" * 62)
     print()
+
+
+def main():
+    valid_ids = [e["id"] for e in EXPERIMENTS]
+    parser = argparse.ArgumentParser(
+        description="Chorus Experiment Runner",
+        epilog=f"Available experiment IDs: {', '.join(valid_ids)}",
+    )
+    parser.add_argument(
+        "experiment", nargs="?", default=None,
+        help="Experiment ID to run, or 'all' to run everything. "
+             "Omit for interactive menu.",
+    )
+    args = parser.parse_args()
+
+    print()
+    print("=" * 62)
+    print("  Chorus Experiment Runner")
+    print("=" * 62)
+    print()
+
+    project = gcp_project()
+    zone = gcp_zone()
+    _check_lock_or_exit()
+
+    # --- Non-interactive mode (CLI argument) ---
+    if args.experiment is not None:
+        selection = args.experiment.lower()
+        if selection == "all":
+            timings = load_timings()
+            acquire_lock("all", sum(e["expected_minutes"] for e in EXPERIMENTS))
+            try:
+                _run_all(project, zone, timings)
+            finally:
+                release_lock()
+            return
+
+        exp = next((e for e in EXPERIMENTS if e["id"] == selection), None)
+        if exp is None:
+            sys.exit(f"  Unknown experiment: {args.experiment}\n"
+                     f"  Valid IDs: {', '.join(valid_ids)}")
+
+        reuse_from = find_existing_logs(exp["id"])
+        _run_single(project, zone, exp, reuse_from)
+        return
+
+    # --- Interactive mode ---
+    print("  This script runs benchmark experiments across the control")
+    print("  and compute VMs and saves results to results/.")
+    print()
+    print("  Tip: run non-interactively with:")
+    print("    python3 scripts/run_experiment.py all")
+    print("    python3 scripts/run_experiment.py <experiment_id>")
+    print()
+
+    timings = load_timings()
+    print_menu(timings)
+
+    try:
+        raw = input("  Select experiment number (or 'a' for all): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        sys.exit("  Invalid selection.")
+
+    if raw == "0":
+        print("  Goodbye.")
+        return
+
+    if raw in ("a", "all"):
+        acquire_lock("all", sum(e["expected_minutes"] for e in EXPERIMENTS))
+        try:
+            _run_all(project, zone, timings)
+        finally:
+            release_lock()
+        return
+
+    try:
+        choice = int(raw)
+    except ValueError:
+        sys.exit(f"  Invalid selection: {raw}")
+
+    if choice < 1 or choice > len(EXPERIMENTS):
+        sys.exit(f"  Invalid selection: {choice}")
+
+    exp = EXPERIMENTS[choice - 1]
+
+    action = prompt_rerun(exp)
+    if action == "skip":
+        print("  Skipping — nothing changed.")
+        return
+
+    reuse_from = None
+    if action == "reuse":
+        reuse_from = find_existing_logs(exp["id"])
+
+    _run_single(project, zone, exp, reuse_from)
 
 
 if __name__ == "__main__":
