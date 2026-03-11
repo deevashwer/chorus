@@ -49,6 +49,13 @@ IP address.  Your local machine needs Python 3 and an SSH client.
 You can also run `run_experiment.py` without arguments for an
 interactive menu, or pass a single experiment ID (e.g. `table6`).
 
+Benchmark logs are cached in `results/` and reused across runs since
+they take a long time to produce.  To force a full re-run from scratch:
+
+```bash
+python3 ~/chorus/scripts/run_experiment.py all --force
+```
+
 All commands run inside a **GNU screen** session.  If you disconnect,
 experiments keep running.  Re-run `login.py` to reconnect.
 
@@ -70,6 +77,5 @@ Each experiment saves results to `results/<experiment_id>/<timestamp>/`.
 | 7 | `server_cost` | Server dollar-cost estimation | < 1 min* |
 | 8 | `table10` | Table 10: Parameter selection | < 1 min |
 
-\* Experiments 3–7 share benchmark logs.  Once `table9` (server) and
-`table6` (server + client) have run, experiments 4–7 reuse those logs
-and finish in under a minute each.
+\* Experiments 2–7 share benchmark logs.  Once `table9` and `table6`
+have run, experiments 4–7 reuse those logs and finish instantly.

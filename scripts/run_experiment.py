@@ -241,6 +241,16 @@ def _expected_logs(exp_id: str) -> list[str]:
     return [s["log"] for s in steps]
 
 
+def _log_base_dir(exp_id: str) -> str:
+    """Return the directory name under results/ where logs are stored.
+
+    Experiments that share a config key (e.g. all SR experiments share
+    'secret_recovery') store their logs in a shared directory so they
+    don't re-run benchmarks.
+    """
+    return _EXP_CONFIG_KEY.get(exp_id, exp_id)
+
+
 def find_existing_logs(exp_id: str) -> Path | None:
     """Return the most-recent run directory that contains all expected log
     files, or None if no complete set of logs exists."""
@@ -248,22 +258,18 @@ def find_existing_logs(exp_id: str) -> Path | None:
     if not expected:
         return None
 
-    config_key = _EXP_CONFIG_KEY.get(exp_id, exp_id)
-    search_dirs = [RESULTS_DIR / exp_id]
-    if config_key != exp_id:
-        search_dirs.append(RESULTS_DIR / config_key)
+    log_base = RESULTS_DIR / _log_base_dir(exp_id)
+    if not log_base.is_dir():
+        return None
 
-    for exp_base in search_dirs:
-        if not exp_base.is_dir():
-            continue
-        subdirs = sorted(
-            (d for d in exp_base.iterdir() if d.is_dir()),
-            key=lambda d: d.name,
-            reverse=True,
-        )
-        for run_dir in subdirs:
-            if all((run_dir / name).exists() for name in expected):
-                return run_dir
+    subdirs = sorted(
+        (d for d in log_base.iterdir() if d.is_dir()),
+        key=lambda d: d.name,
+        reverse=True,
+    )
+    for run_dir in subdirs:
+        if all((run_dir / name).exists() for name in expected):
+            return run_dir
     return None
 
 
@@ -754,31 +760,51 @@ _SR_SCRIPTS = {
 }
 
 
+def _find_or_create_sr_log_dir() -> Path:
+    """Return the most recent secret_recovery log directory, or create one."""
+    sr_base = RESULTS_DIR / "secret_recovery"
+    if sr_base.is_dir():
+        subdirs = sorted(
+            (d for d in sr_base.iterdir() if d.is_dir()),
+            key=lambda d: d.name,
+            reverse=True,
+        )
+        if subdirs:
+            return subdirs[0]
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_dir = sr_base / ts
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
+
+
 def make_sr_runner(generate_target: str):
     """Create a run function for a single SR output.
 
-    table9 only needs the server log; everything else also needs the
-    client log (with network throttling).
+    Benchmark logs are written to a shared ``results/secret_recovery/``
+    directory so that multiple experiments can reuse them.  Generated
+    outputs go to the per-experiment ``exp_dir``.
     """
     needs_client = _SR_NEEDS_CLIENT[generate_target]
 
     def runner(project: str, zone: str, exp_dir: Path,
                reuse_from: Path | None = None):
         if reuse_from is not None:
+            log_dir = reuse_from
             print()
-            print(f"  Reusing logs from {reuse_from}")
+            print(f"  Reusing logs from {log_dir}")
         else:
-            server_log = exp_dir / "secret_recovery_server.log"
+            log_dir = _find_or_create_sr_log_dir()
+
+            server_log = log_dir / "secret_recovery_server.log"
             if not server_log.exists():
-                _run_sr_server_benchmark(project, zone, exp_dir)
+                _run_sr_server_benchmark(project, zone, log_dir)
 
             if needs_client:
-                client_log = exp_dir / "secret_recovery_client.log"
+                client_log = log_dir / "secret_recovery_client.log"
                 if not client_log.exists():
-                    _run_sr_client_benchmark(project, zone, exp_dir)
+                    _run_sr_client_benchmark(project, zone, log_dir)
 
         script = _SR_SCRIPTS[generate_target]
-        log_dir = reuse_from if reuse_from else exp_dir
 
         print()
         print(f"  Generating {generate_target} ...")
@@ -885,8 +911,20 @@ EXPERIMENTS = [
 # Interactive menu
 # ---------------------------------------------------------------------------
 
-def _run_all(project: str, zone: str, timings: dict):
-    """Run every experiment sequentially, reusing logs where possible."""
+def _run_all(project: str, zone: str, timings: dict, force: bool = False):
+    """Run every experiment sequentially, reusing logs where possible.
+
+    If *force* is True, ignore pre-existing logs so benchmarks re-run
+    from scratch.  Logs produced within this run are still shared across
+    experiments (via the shared secret_recovery/ directory).
+    """
+    if force:
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        fresh_sr = RESULTS_DIR / "secret_recovery" / ts
+        fresh_sr.mkdir(parents=True, exist_ok=True)
+        print(f"  --force: fresh benchmark logs will go to {fresh_sr}")
+        print()
+
     total_start = time.time()
     results = []
 
@@ -897,7 +935,7 @@ def _run_all(project: str, zone: str, timings: dict):
         print(f"  [{exp_id}]  {exp['description']}")
         print("=" * 62)
 
-        reuse_from = find_existing_logs(exp_id)
+        reuse_from = None if force else find_existing_logs(exp_id)
         if reuse_from is not None:
             print(f"  Reusing existing logs from {reuse_from}")
 
@@ -1027,6 +1065,10 @@ def main():
         help="Experiment ID to run, or 'all' to run everything. "
              "Omit for interactive menu.",
     )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Re-run all benchmarks from scratch (only with 'all').",
+    )
     args = parser.parse_args()
 
     print()
@@ -1046,7 +1088,7 @@ def main():
             timings = load_timings()
             acquire_lock("all", sum(e["expected_minutes"] for e in EXPERIMENTS))
             try:
-                _run_all(project, zone, timings)
+                _run_all(project, zone, timings, force=args.force)
             finally:
                 release_lock()
             return
