@@ -6,6 +6,16 @@ Rust implementation and reproducibility package for the Chorus paper,
 targeting the IEEE S&P **Available**, **Functional**, and **Reproduced**
 badges.
 
+### Hardware
+
+The artifact uses two GCP VMs in the same zone:
+
+- **Compute VM (server):** `c2d-standard-112` — 112 vCPUs (AMD EPYC Milan), 448 GB RAM, 200 GB disk.
+- **Control VM (client):** `e2-standard-8` — 8 vCPUs, 8 GB RAM.
+
+Both run Ubuntu 22.04.  The compute VM is created and destroyed by the
+setup/teardown scripts; the control VM is pre-provisioned by the authors.
+
 ### Important: Differences from the Paper
 
 The paper's client experiments ran on an **Android phone** (Snapdragon 8 Gen 3, 8 cores, 8 GB RAM).  This artifact uses a **cloud VM** as
