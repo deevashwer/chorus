@@ -9,12 +9,18 @@ use std::net::TcpStream as StdTcpStream;
 use std::io::Read;
 use crate::read_from_file;
 use crate::secret_recovery::common::{CoefficientCommitments, CommitteeData, CommitteeStateClient, Handover, HandoverLite, PublicState, RecoveryRequestBatch, RecoveryResponseBatch};
-use ark_std::cfg_into_iter;
+use ark_std::{cfg_into_iter, end_timer, start_timer};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-const DEFAULT_PORT: &str = "32000";
+fn default_port() -> String {
+    let config = load_config();
+    config["network"]["server_port"]
+        .as_u64()
+        .expect("config.json must have network.server_port")
+        .to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientDownloadContribute {
@@ -208,12 +214,23 @@ pub enum API {
     TypicalHandover,
 }
 
-const ALL_CASES: [usize; 2] = [1, 2];
-const ALL_NUM_CLIENTS: [usize; 3] = [
-    10usize.pow(6),
-    10usize.pow(7),
-    10usize.pow(8),
-];
+fn load_config() -> serde_json::Value {
+    let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config.json");
+    let data = std::fs::read_to_string(&config_path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", config_path.display(), e));
+    serde_json::from_str(&data)
+        .unwrap_or_else(|e| panic!("Failed to parse {}: {}", config_path.display(), e))
+}
+
+fn parse_num_clients_str(s: &str) -> usize {
+    let s = s.trim().to_uppercase();
+    match s.as_str() {
+        "1M" => 10usize.pow(6),
+        "10M" => 10usize.pow(7),
+        "100M" => 10usize.pow(8),
+        other => other.parse::<usize>().expect("NUM_CLIENTS entries must be 1M, 10M, 100M, or a raw number"),
+    }
+}
 
 fn selected_cases() -> Vec<usize> {
     if let Ok(val) = std::env::var("BENCH_CASES") {
@@ -221,30 +238,32 @@ fn selected_cases() -> Vec<usize> {
             .map(|s| s.trim().parse::<usize>().expect("BENCH_CASES must be comma-separated case numbers"))
             .collect()
     } else {
-        ALL_CASES.to_vec()
+        let config = load_config();
+        config["bench_cases"].as_array()
+            .expect("config.json must have a bench_cases array")
+            .iter()
+            .map(|c| c["case"].as_u64().expect("each bench_case must have a 'case' number") as usize)
+            .collect()
     }
 }
 
 fn selected_num_clients() -> Vec<usize> {
     if let Ok(val) = std::env::var("NUM_CLIENTS") {
         val.split(',')
-            .map(|s| {
-                let s = s.trim().to_uppercase();
-                match s.as_str() {
-                    "1M" => 10usize.pow(6),
-                    "10M" => 10usize.pow(7),
-                    "100M" => 10usize.pow(8),
-                    other => other.parse::<usize>().expect("NUM_CLIENTS entries must be 1M, 10M, 100M, or a raw number"),
-                }
-            })
+            .map(|s| parse_num_clients_str(s))
             .collect()
     } else {
-        ALL_NUM_CLIENTS.to_vec()
+        let config = load_config();
+        config["num_clients"].as_array()
+            .expect("config.json must have a num_clients array")
+            .iter()
+            .map(|v| parse_num_clients_str(v.as_str().expect("num_clients entries must be strings")))
+            .collect()
     }
 }
 
 pub fn server_port() -> String {
-    std::env::var("SERVER_PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string())
+    std::env::var("SERVER_PORT").unwrap_or_else(|_| default_port())
 }
 
 pub type NetworkResponses = HashMap<NetworkRequest, Vec<u8>>;
@@ -344,7 +363,14 @@ pub async fn populate_network_responses() -> NetworkResponses {
 
 pub async fn network_service() -> Result<(), Box<dyn std::error::Error>> {
     let port = server_port();
-    let ip = format!("0.0.0.0:{}", port);
+    let bind_ip = std::env::var("SERVER_BIND_IP").unwrap_or_else(|_| {
+        let config = load_config();
+        config["network"]["server_bind_ip"]
+            .as_str()
+            .expect("config.json must have network.server_bind_ip")
+            .to_string()
+    });
+    let ip = format!("{}:{}", bind_ip, port);
     let addr = ip.parse().unwrap();
 
     let network_responses = populate_network_responses().await;

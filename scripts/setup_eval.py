@@ -14,6 +14,7 @@ detected and skipped automatically.
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -105,7 +106,7 @@ def vm_exists(project: str, zone: str) -> bool:
     if r.returncode != 0:
         return False
     info = json.loads(r.stdout)
-    status = info.get("status", "")
+    status = info["status"]
     print(f"    Compute VM already exists (status: {status})")
     return status == "RUNNING"
 
@@ -144,7 +145,7 @@ def wait_for_ssh(project: str, zone: str, retries: int = 30, delay: int = 10):
 def ssh_cmd(project: str, zone: str, command: str):
     run(["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
          "--project", project, "--zone", zone, "--",
-         f"bash -lc '{command}'"])
+         f"bash -lc {shlex.quote(command)}"])
 
 
 def copy_repo(project: str, zone: str):

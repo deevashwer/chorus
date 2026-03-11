@@ -10,8 +10,9 @@ Usage:
     python3 scripts/run.py serve
 
 Configuration is read from config.json at the repository root.
-Environment variables BENCH_CASES, NUM_CLIENTS, SERVER_IP, and
-SERVER_PORT override the corresponding config.json values when set.
+Environment variables BENCH_CASES, NUM_CLIENTS, SERVER_BIND_IP,
+and SERVER_PORT override the corresponding config.json values when set.
+SERVER_IP (the IP clients connect to) is set by run_experiment.py.
 """
 
 import json
@@ -29,19 +30,28 @@ with open(CONFIG_PATH) as _f:
 
 
 def _env_defaults() -> dict:
-    """Build env overrides from config.json for the benchmark binary."""
+    """Build env overrides from config.json for the benchmark binary.
+
+    Environment variables already set in the process take precedence
+    over values from config.json (BENCH_CASES, NUM_CLIENTS,
+    SERVER_BIND_IP, SERVER_PORT, WITH_NETWORK).
+
+    SERVER_IP (the address clients connect to) is NOT set here; it is
+    injected by run_experiment.py after auto-detecting the compute VM's
+    internal IP.
+    """
     env = {}
-    # Suppress compiler warnings
     env["RUSTFLAGS"] = "-A warnings"
-    # Bench cases: e.g. "1,2"
     cases = [str(c["case"]) for c in CONFIG["bench_cases"]]
-    env["BENCH_CASES"] = ",".join(cases)
-    # Num clients: e.g. "1M,10M,100M"
-    env["NUM_CLIENTS"] = ",".join(CONFIG["num_clients"])
-    # Network
-    net = CONFIG.get("network", {})
-    env["SERVER_IP"] = net.get("server_ip", "0.0.0.0")
-    env["SERVER_PORT"] = str(net.get("server_port", 32000))
+    env["BENCH_CASES"] = os.environ.get("BENCH_CASES", ",".join(cases))
+    env["NUM_CLIENTS"] = os.environ.get("NUM_CLIENTS", ",".join(CONFIG["num_clients"]))
+    net = CONFIG["network"]
+    env["SERVER_BIND_IP"] = os.environ.get("SERVER_BIND_IP", net["server_bind_ip"])
+    env["SERVER_PORT"] = os.environ.get("SERVER_PORT", str(net["server_port"]))
+    if "SERVER_IP" in os.environ:
+        env["SERVER_IP"] = os.environ["SERVER_IP"]
+    if "WITH_NETWORK" in os.environ:
+        env["WITH_NETWORK"] = os.environ["WITH_NETWORK"]
     return env
 
 
@@ -104,7 +114,11 @@ def cmd_bench(bench_name, mode=None):
     env = _env_defaults()
     if mode:
         env["BENCHMARK_TYPE"] = mode.upper()
-    run(["cargo", "bench", "--bench", bench_name], env_extra=env)
+    cmd = ["cargo", "bench", "--bench", bench_name]
+    features = os.environ.get("CARGO_FEATURES")
+    if features:
+        cmd += ["--features", features]
+    run(cmd, env_extra=env)
     print(f"\n⏱  Bench {label}: {fmt_elapsed(time.time() - t0)}")
 
 

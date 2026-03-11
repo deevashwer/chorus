@@ -20,6 +20,7 @@ Features:
 import datetime
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -118,7 +119,7 @@ def ssh_cmd(project, zone, command, *, log_path=None):
     cmd = [
         "gcloud", "compute", "ssh", COMPUTE_VM_NAME,
         "--project", project, "--zone", zone, "--",
-        f"bash -lc '{command}'",
+        f"bash -lc {shlex.quote(command)}",
     ]
     run_local(cmd, log_path=log_path)
 
@@ -154,7 +155,7 @@ def check_lock():
         LOCK_FILE.unlink(missing_ok=True)
         return None
 
-    if pid_alive(lock.get("pid", -1)):
+    if "pid" not in lock or pid_alive(lock["pid"]):
         return lock
 
     print("    (Cleaned up a stale lock from a previous crashed run.)")
@@ -208,16 +209,39 @@ def expected_duration_str(exp: dict, timings: dict) -> str:
 # Existing-results detection (log files only — plots are cheap to regenerate)
 # ---------------------------------------------------------------------------
 
+def _resolve_experiment(exp_id: str) -> dict | None:
+    """Find the EXPERIMENTS entry for a given id."""
+    return next((e for e in EXPERIMENTS if e["id"] == exp_id), None)
+
+
 def _expected_logs(exp_id: str) -> list[str]:
-    """Return the list of log filenames an experiment produces."""
-    exp_cfg = CONFIG.get("experiments", {}).get(exp_id, {})
-    return [step["log"] for step in exp_cfg.get("steps", [])]
+    """Return the list of log filenames an experiment produces.
+
+    If the experiment has a ``log_source``, the steps are read from
+    that experiment's config instead.
+    """
+    entry = _resolve_experiment(exp_id)
+    config_id = (entry.get("log_source") if entry else None) or exp_id
+    if config_id not in CONFIG["experiments"]:
+        return []
+    exp_cfg = CONFIG["experiments"][config_id]
+    return [step["log"] for step in exp_cfg["steps"]]
+
+
+def _results_group(exp_id: str) -> str:
+    """Return the results-directory base for an experiment.
+
+    Experiments that share a ``results_group`` write to the same
+    ``results/<group>/`` tree so they can share log files.
+    """
+    entry = _resolve_experiment(exp_id)
+    return (entry.get("results_group") if entry else None) or exp_id
 
 
 def find_existing_logs(exp_id: str) -> Path | None:
     """Return the most-recent run directory that contains all expected log
     files, or None if no complete set of logs exists."""
-    exp_base = RESULTS_DIR / exp_id
+    exp_base = RESULTS_DIR / _results_group(exp_id)
     if not exp_base.is_dir():
         return None
     expected = _expected_logs(exp_id)
@@ -250,8 +274,11 @@ def prompt_rerun(exp: dict) -> str:
 
     expected = _expected_logs(exp["id"])
 
+    group = _results_group(exp["id"])
+    src_label = (f"'{exp['id']}' (shared logs from '{group}')"
+                 if group != exp["id"] else f"'{exp['id']}'")
     print()
-    print(f"  📁  Experiment '{exp['id']}' already has log files:")
+    print(f"  📁  Experiment {src_label} already has log files:")
     print(f"      {prev_dir}")
     print()
     for log_name in expected:
@@ -260,7 +287,7 @@ def prompt_rerun(exp: dict) -> str:
         print(f"        {log_name:40s}  ({size:,} bytes)")
     print()
     print("  Options:")
-    print("    [u] Use existing logs — skip benchmarks, just re-plot")
+    print("    [u] Use existing logs — skip benchmarks, just re-generate")
     print("    [r] Re-run benchmarks from scratch")
     print("    [s] Skip — do nothing")
     print()
@@ -345,6 +372,204 @@ def ensure_matplotlib():
         )
 
 
+def ensure_tqdm():
+    """Ensure tqdm is available (used by generate_table10.py)."""
+    try:
+        import tqdm  # noqa: F401
+    except ImportError:
+        print("    Installing tqdm ...")
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "tqdm"],
+            check=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Network limiting helpers
+# ---------------------------------------------------------------------------
+
+def get_default_interface():
+    """Get the default network interface on the local (control) VM."""
+    r = subprocess.run(
+        ["bash", "-c", "ip -o -4 route show to default | head -1 | cut -d' ' -f5"],
+        capture_output=True, text=True,
+    )
+    return r.stdout.strip() or "ens4"
+
+
+def get_remote_interface(project, zone):
+    """Get the default network interface on the compute VM."""
+    r = subprocess.run(
+        ["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
+         "--project", project, "--zone", zone, "--",
+         "ip -o -4 route show to default | head -1 | cut -d' ' -f5"],
+        capture_output=True, text=True,
+    )
+    return r.stdout.strip() or "ens4"
+
+
+def get_compute_ip(project, zone):
+    """Return the compute VM's internal IP address."""
+    r = subprocess.run(
+        ["gcloud", "compute", "instances", "describe", COMPUTE_VM_NAME,
+         "--project", project, "--zone", zone,
+         "--format=get(networkInterfaces[0].networkIP)"],
+        capture_output=True, text=True, check=True,
+    )
+    return r.stdout.strip()
+
+
+def apply_network_limit(project, zone):
+    """Apply bandwidth and latency limits on both VMs.
+
+    Values come from config.json → network_limit.
+    """
+    nl = CONFIG["network_limit"]
+    bw = nl["bandwidth_mbps"]
+    rtt = nl["rtt_ms"]
+    delay = rtt // 2  # half RTT applied on each side
+
+    local_iface = get_default_interface()
+    remote_iface = get_remote_interface(project, zone)
+
+    print()
+    print("  " + "=" * 58)
+    print(f"  ⚠  APPLYING NETWORK LIMITS between VMs")
+    print(f"      Bandwidth : {bw} Mbps")
+    print(f"      RTT       : {rtt} ms  ({delay} ms each direction)")
+    print(f"      Control VM interface : {local_iface}")
+    print(f"      Compute VM interface : {remote_iface}")
+    print("  " + "=" * 58)
+
+    # Control VM (local)
+    subprocess.run(
+        ["sudo", "tc", "qdisc", "del", "dev", local_iface, "root"],
+        capture_output=True,
+    )
+    run_local(["sudo", "tc", "qdisc", "add", "dev", local_iface,
+               "root", "handle", "1:", "netem", "delay", f"{delay}ms"])
+    run_local(["sudo", "tc", "qdisc", "add", "dev", local_iface,
+               "parent", "1:", "tbf", "rate", f"{bw}mbit",
+               "burst", "32kbit", "latency", "400ms"])
+
+    # Compute VM (remote)
+    ssh_cmd(project, zone,
+            f"sudo tc qdisc del dev {remote_iface} root 2>/dev/null; "
+            f"sudo tc qdisc add dev {remote_iface} root handle 1: "
+            f"netem delay {delay}ms && "
+            f"sudo tc qdisc add dev {remote_iface} parent 1: tbf "
+            f"rate {bw}mbit burst 32kbit latency 400ms")
+
+    print("      ✓ Network limits applied on both VMs.")
+    print()
+
+
+def remove_network_limit(project, zone):
+    """Remove any tc qdiscs on both VMs (best-effort, never fails)."""
+    local_iface = get_default_interface()
+    subprocess.run(
+        ["sudo", "tc", "qdisc", "del", "dev", local_iface, "root"],
+        capture_output=True,
+    )
+    try:
+        remote_iface = get_remote_interface(project, zone)
+        tc_cmd = f"sudo tc qdisc del dev {remote_iface} root 2>/dev/null || true"
+        subprocess.run(
+            ["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
+             "--project", project, "--zone", zone, "--",
+             f"bash -lc {shlex.quote(tc_cmd)}"],
+            capture_output=True,
+        )
+    except Exception:
+        pass
+
+    print()
+    print("  " + "=" * 58)
+    print("  ⚠  NETWORK LIMITS REMOVED on both VMs")
+    print("  " + "=" * 58)
+    print()
+
+
+def start_server_on_compute(project, zone):
+    """Start the Chorus network server on the compute VM in background."""
+    bench_cases = ",".join(str(c["case"]) for c in CONFIG["bench_cases"])
+    num_clients = ",".join(CONFIG["num_clients"])
+    port = CONFIG["network"]["server_port"]
+
+    # Ensure the server binary is built (cargo bench doesn't build it)
+    print("    Building server binary on compute VM...")
+    ssh_cmd(project, zone,
+            "cd ~/chorus && RUSTFLAGS='-A warnings' "
+            "cargo build --release --bin server")
+
+    ssh_cmd(project, zone,
+            f"cd ~/chorus && "
+            f"BENCH_CASES={bench_cases} NUM_CLIENTS={num_clients} "
+            f"SERVER_PORT={port} "
+            f"setsid ./target/release/server "
+            f"> /tmp/chorus_server.log 2>&1 & echo $! > /tmp/chorus_server.pid && sleep 1")
+    # Wait for "Server listening" (the server loads state files first, which can be slow)
+    print("    Waiting for server to be ready (loading state, may take a few minutes)...")
+    wait_cmd = (
+        'timeout 300 bash -c \''
+        'while ! grep -q "Server listening" /tmp/chorus_server.log 2>/dev/null; '
+        "do sleep 2; done'"
+    )
+    r = subprocess.run(
+        ["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
+         "--project", project, "--zone", zone, "--",
+         f"bash -lc {shlex.quote(wait_cmd)}"],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        print("    Server did not become ready within timeout. Server log:")
+        cat_cmd = "cat /tmp/chorus_server.log 2>/dev/null || echo '[no log file]'"
+        diag = subprocess.run(
+            ["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
+             "--project", project, "--zone", zone, "--",
+             f"bash -lc {shlex.quote(cat_cmd)}"],
+            capture_output=True, text=True,
+        )
+        for line in diag.stdout.strip().splitlines():
+            print(f"      {line}")
+        raise RuntimeError("Server failed to start — see log above.")
+    print("    ✓ Server is listening.")
+
+
+def stop_server_on_compute(project, zone):
+    """Kill the Chorus network server on the compute VM (best-effort)."""
+    try:
+        stop_cmd = ("kill $(cat /tmp/chorus_server.pid) 2>/dev/null; "
+                    "rm -f /tmp/chorus_server.pid /tmp/chorus_server.log || true")
+        subprocess.run(
+            ["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
+             "--project", project, "--zone", zone, "--",
+             f"bash -lc {shlex.quote(stop_cmd)}"],
+            capture_output=True,
+        )
+        print("    ✓ Server stopped on compute VM.")
+    except Exception:
+        pass
+
+
+def copy_state_dirs(project, zone):
+    """Copy case_*_clients_* directories from compute VM to control VM."""
+    print("    Archiving state directories on compute VM...")
+    ssh_cmd(project, zone,
+            "cd ~/chorus && tar czf /tmp/chorus_case_dirs.tar.gz "
+            "case_*_clients_* 2>/dev/null || true")
+    print("    Copying archive to control VM...")
+    scp_from_compute(project, zone,
+                     "/tmp/chorus_case_dirs.tar.gz",
+                     "/tmp/chorus_case_dirs.tar.gz")
+    print("    Extracting on control VM...")
+    run_local(["tar", "xzf", "/tmp/chorus_case_dirs.tar.gz",
+               "-C", str(REPO_DIR)])
+    run_local(["rm", "-f", "/tmp/chorus_case_dirs.tar.gz"])
+    ssh_cmd(project, zone, "rm -f /tmp/chorus_case_dirs.tar.gz")
+    print("    ✓ State directories copied.")
+
+
 # ---------------------------------------------------------------------------
 # Experiment: Figure 5 — saVSS vs cgVSS
 # ---------------------------------------------------------------------------
@@ -363,8 +588,8 @@ def run_figure5(project: str, zone: str, exp_dir: Path,
     """
     import shutil
 
-    exp_cfg = CONFIG.get("experiments", {}).get("figure5", {})
-    steps = exp_cfg.get("steps", [])
+    exp_cfg = CONFIG["experiments"]["figure5"]
+    steps = exp_cfg["steps"]
     run_py = "python3 scripts/run.py"
 
     if reuse_from is not None:
@@ -388,7 +613,7 @@ def run_figure5(project: str, zone: str, exp_dir: Path,
                 sync_to_compute(project, zone)
                 for step in compute_steps:
                     bench = step["bench"]
-                    mode = step.get("mode")
+                    mode = step["mode"]
                     log_name = step["log"]
                     bench_cmd = f"{run_py} bench {bench}" + (f" {mode}" if mode else "")
                     remote_log = f"/tmp/{log_name}"
@@ -406,7 +631,7 @@ def run_figure5(project: str, zone: str, exp_dir: Path,
                 ensure_local_build()
                 for step in control_steps:
                     bench = step["bench"]
-                    mode = step.get("mode")
+                    mode = step["mode"]
                     log_name = step["log"]
                     log_path = exp_dir / log_name
                     bench_cmd = f"{run_py} bench {bench}" + (f" {mode}" if mode else "")
@@ -422,7 +647,7 @@ def run_figure5(project: str, zone: str, exp_dir: Path,
     with timed("Plotting"):
         ensure_matplotlib()
         run_local(
-            [sys.executable, str(REPO_DIR / "experiments" / "plot_nivss.py"),
+            [sys.executable, str(REPO_DIR / "experiments" / "generate_figure5.py"),
              "--results-dir", str(exp_dir)],
         )
 
@@ -435,17 +660,224 @@ def run_figure5(project: str, zone: str, exp_dir: Path,
 
 
 # ---------------------------------------------------------------------------
+# Experiment: Secret Recovery — shared benchmark runner + per-output factories
+# ---------------------------------------------------------------------------
+
+def _run_sr_benchmark(project: str, zone: str, exp_dir: Path):
+    """Run the secret-recovery server and client benchmarks.
+
+    Steps:
+      1. Server benchmark on compute VM  (BENCHMARK_TYPE=SERVER)
+      2. Copy pre-generated state directories to control VM
+      3. Start the Chorus network server on compute VM
+      4. Apply network limits  (bandwidth / RTT from config.json)
+      5. Client benchmark on control VM   (BENCHMARK_TYPE=CLIENT, WITH_NETWORK=1)
+      6. Remove network limits + stop server
+    """
+    run_py = "python3 scripts/run.py"
+    server_started = False
+    network_limited = False
+
+    try:
+        # --- 1. Server benchmark on compute VM ---
+        print()
+        print("  Running SERVER benchmark on compute VM ...")
+        with timed("Server benchmark (compute VM)"):
+            sync_to_compute(project, zone)
+            remote_log = "/tmp/secret_recovery_server.log"
+            ssh_cmd(project, zone,
+                    f"cd ~/chorus && "
+                    f"{run_py} bench secret_recovery server "
+                    f"2>&1 | tee {remote_log}",
+                    log_path=None)
+            scp_from_compute(project, zone, remote_log,
+                             exp_dir / "secret_recovery_server.log")
+
+        # --- 2. Copy state directories to control VM ---
+        print()
+        print("  Copying pre-generated state to control VM ...")
+        with timed("Copy state directories"):
+            copy_state_dirs(project, zone)
+
+        # --- 3. Start server on compute VM ---
+        print()
+        print("  Starting network server on compute VM ...")
+        start_server_on_compute(project, zone)
+        server_started = True
+
+        # --- 4. Ensure local build ---
+        print()
+        print("  Building on control VM (if needed) ...")
+        ensure_local_build()
+
+        # --- 5. Get compute IP ---
+        compute_ip = get_compute_ip(project, zone)
+        print(f"    Compute VM internal IP: {compute_ip}")
+
+        # --- 6. Apply network limits ---
+        apply_network_limit(project, zone)
+        network_limited = True
+
+        # --- 7. Client benchmark on control VM ---
+        print()
+        print("  Running CLIENT benchmark on control VM ...")
+        print("  (Network is limited to "
+              f"{CONFIG['network_limit']['bandwidth_mbps']} Mbps, "
+              f"{CONFIG['network_limit']['rtt_ms']} ms RTT)")
+        log_path = exp_dir / "secret_recovery_client.log"
+        with timed("Client benchmark (control VM)"):
+            run_local(
+                ["bash", "-c",
+                 f"cd {REPO_DIR} && {run_py} bench secret_recovery client "
+                 f"2>&1 | tee {log_path}"],
+                env_extra={
+                    "WITH_NETWORK": "1",
+                    "SERVER_IP": compute_ip,
+                    "CARGO_FEATURES": "print-trace",
+                },
+            )
+
+    finally:
+        if network_limited:
+            remove_network_limit(project, zone)
+        if server_started:
+            stop_server_on_compute(project, zone)
+
+
+_SR_SCRIPTS = {
+    "table6":      "generate_table6.py",
+    "table7":      "generate_table7.py",
+    "figure8":     "generate_figure8.py",
+    "table9":      "generate_table9.py",
+    "appendixA41": "generate_appendixA41.py",
+}
+
+
+def make_secret_recovery_runner(generate_target: str):
+    """Create a run function that runs the SR benchmark (if needed) then
+    invokes the per-output generation script(s).
+
+    *generate_target* is ``"all"`` or one of the keys in ``_SR_SCRIPTS``.
+    """
+    def runner(project: str, zone: str, exp_dir: Path,
+               reuse_from: Path | None = None):
+        if reuse_from is not None:
+            log_dir = reuse_from
+            print()
+            print(f"  Reusing logs from {log_dir}")
+        else:
+            _run_sr_benchmark(project, zone, exp_dir)
+            log_dir = exp_dir
+
+        scripts = (list(_SR_SCRIPTS.values())
+                   if generate_target == "all"
+                   else [_SR_SCRIPTS[generate_target]])
+        label = "all tables & figures" if generate_target == "all" else generate_target
+
+        print()
+        print(f"  Generating {label} ...")
+        with timed(f"Generating {label}"):
+            ensure_matplotlib()
+            for script in scripts:
+                run_local(
+                    [sys.executable,
+                     str(REPO_DIR / "experiments" / script),
+                     "--results-dir", str(log_dir),
+                     "--output-dir", str(exp_dir)],
+                )
+
+        print()
+        print("  Generated files:")
+        for f in sorted(exp_dir.iterdir()):
+            size = f.stat().st_size
+            print(f"    {f.name:40s}  ({size:,} bytes)")
+
+    return runner
+
+
+# ---------------------------------------------------------------------------
+# Experiment: Table 10 — Parameter selection (pure computation, no benchmarks)
+# ---------------------------------------------------------------------------
+
+def run_table10(project: str, zone: str, exp_dir: Path,
+                reuse_from: Path | None = None):
+    """Generate Table 10 by computing parameters. Local-only, no VMs needed."""
+    print()
+    print("  Generating Table 10 (parameter computation) ...")
+    with timed("Generating table10"):
+        run_local(
+            [sys.executable,
+             str(REPO_DIR / "experiments" / "generate_table10.py"),
+             "--output-dir", str(exp_dir)],
+        )
+
+    print()
+    print("  Generated files:")
+    for f in sorted(exp_dir.iterdir()):
+        size = f.stat().st_size
+        print(f"    {f.name:40s}  ({size:,} bytes)")
+
+
+# ---------------------------------------------------------------------------
 # Experiment registry
 # ---------------------------------------------------------------------------
+
+_SR_MINUTES = CONFIG["experiments"]["secret_recovery"]["expected_minutes"]
 
 EXPERIMENTS = [
     {
         "id": "figure5",
         "description": "Figure 5: saVSS vs cgVSS runtime and communication",
-        "expected_minutes": CONFIG.get("experiments", {})
-                                  .get("figure5", {})
-                                  .get("expected_minutes", 120),
+        "expected_minutes": CONFIG["experiments"]["figure5"]["expected_minutes"],
         "run": run_figure5,
+    },
+    # -- Secret-recovery outputs (all share the same benchmark logs) ---------
+    {
+        "id": "table6",
+        "description": "Table 6: Secret-recovery client costs",
+        "expected_minutes": _SR_MINUTES,
+        "log_source": "secret_recovery",
+        "results_group": "secret_recovery",
+        "run": make_secret_recovery_runner("table6"),
+    },
+    {
+        "id": "table7",
+        "description": "Table 7: Client committee costs and sortition frequency",
+        "expected_minutes": _SR_MINUTES,
+        "log_source": "secret_recovery",
+        "results_group": "secret_recovery",
+        "run": make_secret_recovery_runner("table7"),
+    },
+    {
+        "id": "figure8",
+        "description": "Figure 8: Client cost breakdown (time + communication)",
+        "expected_minutes": _SR_MINUTES,
+        "log_source": "secret_recovery",
+        "results_group": "secret_recovery",
+        "run": make_secret_recovery_runner("figure8"),
+    },
+    {
+        "id": "table9",
+        "description": "Table 9: Server per-epoch costs",
+        "expected_minutes": _SR_MINUTES,
+        "log_source": "secret_recovery",
+        "results_group": "secret_recovery",
+        "run": make_secret_recovery_runner("table9"),
+    },
+    {
+        "id": "appendixA41",
+        "description": "Appendix A.4.1: One-time DKG setup costs",
+        "expected_minutes": _SR_MINUTES,
+        "log_source": "secret_recovery",
+        "results_group": "secret_recovery",
+        "run": make_secret_recovery_runner("appendixA41"),
+    },
+    # -- Pure computation (no benchmarks) ------------------------------------
+    {
+        "id": "table10",
+        "description": "Table 10: Parameter selection (n, threshold) vs. corruption/offline fractions",
+        "expected_minutes": 1,
+        "run": run_table10,
     },
 ]
 
@@ -453,6 +885,49 @@ EXPERIMENTS = [
 # ---------------------------------------------------------------------------
 # Interactive menu
 # ---------------------------------------------------------------------------
+
+def _run_all(project: str, zone: str, timings: dict):
+    """Run every experiment sequentially, reusing logs where possible."""
+    total_start = time.time()
+    results = []
+
+    for exp in EXPERIMENTS:
+        exp_id = exp["id"]
+        print()
+        print("=" * 62)
+        print(f"  [{exp_id}]  {exp['description']}")
+        print("=" * 62)
+
+        reuse_from = find_existing_logs(exp_id)
+        group = _results_group(exp_id)
+        if reuse_from is not None:
+            exp_dir = reuse_from
+            print(f"  Reusing existing logs from {reuse_from}")
+        else:
+            ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            exp_dir = RESULTS_DIR / group / ts
+            exp_dir.mkdir(parents=True, exist_ok=True)
+
+        start = time.time()
+        try:
+            exp["run"](project, zone, exp_dir, reuse_from=reuse_from)
+            results.append((exp_id, True, time.time() - start))
+            save_timing(exp_id, time.time() - start)
+        except Exception as e:
+            print(f"\n  Experiment '{exp_id}' FAILED: {e}")
+            results.append((exp_id, False, time.time() - start))
+
+    total_duration = time.time() - total_start
+    print()
+    print("=" * 62)
+    print(f"  All experiments completed in {fmt_elapsed(total_duration)}.")
+    print()
+    for exp_id, ok, dur in results:
+        status = "OK" if ok else "FAILED"
+        print(f"    {exp_id:20s}  {status:6s}  {fmt_elapsed(dur)}")
+    print("=" * 62)
+    print()
+
 
 def print_menu(timings: dict):
     print()
@@ -465,7 +940,8 @@ def print_menu(timings: dict):
         print(f"    {i}. [{exp['id']}]  {exp['description']}{status}")
         print(f"       Expected duration: {dur}")
     print()
-    print("    0. Exit")
+    print(f"    a. Run ALL experiments sequentially")
+    print(f"    0. Exit")
     print()
 
 
@@ -490,9 +966,9 @@ def main():
     # Check if another experiment is already running
     lock = check_lock()
     if lock:
-        started = lock.get("started", "unknown")
-        exp_name = lock.get("experiment", "unknown")
-        expected = lock.get("expected_minutes", "?")
+        started = lock["started"]
+        exp_name = lock["experiment"]
+        expected = lock["expected_minutes"]
         elapsed = ""
         try:
             t0 = datetime.datetime.fromisoformat(started)
@@ -517,13 +993,26 @@ def main():
     print_menu(timings)
 
     try:
-        choice = int(input("  Select experiment number: "))
-    except (ValueError, EOFError):
+        raw = input("  Select experiment number (or 'a' for all): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
         sys.exit("  Invalid selection.")
 
-    if choice == 0:
+    if raw == "0":
         print("  Goodbye.")
         return
+
+    if raw in ("a", "all"):
+        acquire_lock("all", sum(e["expected_minutes"] for e in EXPERIMENTS))
+        try:
+            _run_all(project, zone, timings)
+        finally:
+            release_lock()
+        return
+
+    try:
+        choice = int(raw)
+    except ValueError:
+        sys.exit(f"  Invalid selection: {raw}")
 
     if choice < 1 or choice > len(EXPERIMENTS):
         sys.exit(f"  Invalid selection: {choice}")
@@ -542,7 +1031,7 @@ def main():
 
     print()
     if reuse_from:
-        print(f"  Re-plotting experiment: {exp['id']}  (reusing existing logs)")
+        print(f"  Re-generating experiment: {exp['id']}  (reusing existing logs)")
     else:
         print(f"  Starting experiment: {exp['id']}")
     print(f"  {exp['description']}")
@@ -556,9 +1045,15 @@ def main():
     signal.signal(signal.SIGINT, _cleanup)
     signal.signal(signal.SIGTERM, _cleanup)
 
-    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    exp_dir = RESULTS_DIR / exp["id"] / ts
-    exp_dir.mkdir(parents=True, exist_ok=True)
+    group = _results_group(exp["id"])
+
+    if reuse_from is not None:
+        # Write outputs alongside the existing logs — no redundant copies.
+        exp_dir = reuse_from
+    else:
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        exp_dir = RESULTS_DIR / group / ts
+        exp_dir.mkdir(parents=True, exist_ok=True)
 
     start = time.time()
     try:

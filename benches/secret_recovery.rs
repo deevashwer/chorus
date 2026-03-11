@@ -129,16 +129,17 @@ fn selected_num_clients() -> Vec<usize> {
 }
 
 fn network_ip_for_clients() -> String {
-    env::var("SERVER_IP").unwrap_or_else(|_| {
-        let config = load_config();
-        config["network"]["server_ip"].as_str().unwrap_or("0.0.0.0").to_string()
-    })
+    env::var("SERVER_IP")
+        .expect("SERVER_IP must be set to the compute VM's IP for client benchmarks")
 }
 
 fn network_ip_for_server() -> String {
     env::var("SERVER_BIND_IP").unwrap_or_else(|_| {
         let config = load_config();
-        config["network"]["server_ip"].as_str().unwrap_or("0.0.0.0").to_string()
+        config["network"]["server_bind_ip"]
+            .as_str()
+            .expect("config.json must have network.server_bind_ip")
+            .to_string()
     })
 }
 
@@ -435,6 +436,7 @@ fn benches_class(c: &mut Criterion) {
 
     let benchmark_type_str = env::var("BENCHMARK_TYPE").expect("BENCHMARK_TYPE not found");
     let benchmark_type = BenchmarkType::from_str(&benchmark_type_str).unwrap();
+    let with_network = env::var("WITH_NETWORK").map(|v| v == "1").unwrap_or(false);
 
     // set DETERMINISTIC_TEST_RNG = 1 so that ark_std::test_rng() is deterministic
     std::env::set_var("DETERMINISTIC_TEST_RNG", "1");
@@ -696,16 +698,19 @@ fn benches_class(c: &mut Criterion) {
                 clients_state.as_mut().unwrap().epoch += 1;
             },
             BenchmarkType::Client => {
-                let committee_0 = read_from_file!(&dir_name, "committee_0", CommitteeData);
-                let committee_1 = read_from_file!(&dir_name, "committee_1", CommitteeData);
                 let dkg_contribute_id = read_from_file!(&dir_name, "dkg_contribute_id", usize);
                 println!("dkg_contribute_id: {:?}", dkg_contribute_id);
                 let mut dkg_contribute_client_state = ECPSSClient::new(dkg_contribute_id, params.clone());
 
                 let start = chorus::start_stat_tracking!();
                 println!("> Bench DKG Contribute for a client that contributes");
-                bench_dkg_contribute(c, &mut dkg_contribute_client_state, &committee_0, &committee_1, &params, 1);
-                // bench_dkg_contribute_with_network(c, &mut dkg_contribute_client_state, &params, 1, case);
+                if with_network {
+                    bench_dkg_contribute_with_network(c, &mut dkg_contribute_client_state, &params, 1, case);
+                } else {
+                    let committee_0 = read_from_file!(&dir_name, "committee_0", CommitteeData);
+                    let committee_1 = read_from_file!(&dir_name, "committee_1", CommitteeData);
+                    bench_dkg_contribute(c, &mut dkg_contribute_client_state, &committee_0, &committee_1, &params, 1);
+                }
                 chorus::end_stat_tracking!(start);
             }
         }
@@ -771,18 +776,21 @@ fn benches_class(c: &mut Criterion) {
                 clients_state.as_mut().unwrap().epoch += 1;
             },
             BenchmarkType::Client => {
-                let committee_0 = read_from_file!(&dir_name, "committee_0", CommitteeData);
-                let committee_1 = read_from_file!(&dir_name, "committee_1", CommitteeData);
-                let committee_2 = read_from_file!(&dir_name, "committee_2", CommitteeData);
-                let commstate_1 = read_from_file!(&dir_name, "commstate_1_seat_idx", CommitteeStateClient);
-                let public_state_epoch_2 = read_from_file!(&dir_name, "public_state_epoch_2", PublicState);
                 let dkg_handover_id = read_from_file!(&dir_name, "dkg_handover_id", usize);
                 let mut dkg_handover_client_state = ECPSSClient::new(dkg_handover_id, params.clone());
 
                 let start = chorus::start_stat_tracking!();
                 println!("> Bench Handover (DKG) for a client that does handover");
-                bench_handover_dkg(c, &mut dkg_handover_client_state, &public_state_epoch_2, &committee_0, &committee_1, &committee_2, None, &commstate_1, None, &params, 2);
-                // bench_handover_dkg_with_network(c, &mut dkg_handover_client_state, &params, 2, case);
+                if with_network {
+                    bench_handover_dkg_with_network(c, &mut dkg_handover_client_state, &params, 2, case);
+                } else {
+                    let committee_0 = read_from_file!(&dir_name, "committee_0", CommitteeData);
+                    let committee_1 = read_from_file!(&dir_name, "committee_1", CommitteeData);
+                    let committee_2 = read_from_file!(&dir_name, "committee_2", CommitteeData);
+                    let commstate_1 = read_from_file!(&dir_name, "commstate_1_seat_idx", CommitteeStateClient);
+                    let public_state_epoch_2 = read_from_file!(&dir_name, "public_state_epoch_2", PublicState);
+                    bench_handover_dkg(c, &mut dkg_handover_client_state, &public_state_epoch_2, &committee_0, &committee_1, &committee_2, None, &commstate_1, None, &params, 2);
+                }
                 chorus::end_stat_tracking!(start);
             },
         }
@@ -931,26 +939,28 @@ fn benches_class(c: &mut Criterion) {
                 server_state_static = server_state;
             },
             BenchmarkType::Client => {
-                let committee_1 = read_from_file!(&dir_name, "committee_1", CommitteeData);
-                let committee_2 = read_from_file!(&dir_name, "committee_2", CommitteeData);
-                let committee_3 = read_from_file!(&dir_name, "committee_3", CommitteeData);
-                let prev_state = read_from_file!(&dir_name, "commstate_1_seat_idx", CommitteeStateClient);
-                let commstate_2 = read_from_file!(&dir_name, "commstate_2_seat_idx", CommitteeStateClient);
-                let public_state_epoch_3 = read_from_file!(&dir_name, "public_state_epoch_3", PublicState);
                 let typical_handover_id = read_from_file!(&dir_name, "typical_handover_id", usize);
                 let mut typical_handover_client_state = ECPSSClient::new(typical_handover_id, params.clone());
 
-                // reqs_batch
                 let mut server_state = ServerState::new(params.clone());
                 let backup_ciphertext = read_from_file!(&dir_name, "backup_ciphertext", BackupCiphertext);
-                let reqs_batch = read_from_file!(&dir_name, "requests_batch", RecoveryRequestBatch);
                 server_state.store_backup(typical_handover_id, &backup_ciphertext);
                 let recovery_response = read_from_file!(&dir_name, "recovery_response", RecoveryResponse);
 
                 let start = chorus::start_stat_tracking!();
                 println!("> Bench Handover (Typical) for a client that does handover");
-                bench_handover_typical(c, &mut typical_handover_client_state, &public_state_epoch_3, &committee_1, &committee_2, &committee_3, Some(&prev_state.coeff_cmts), &commstate_2, Some(&reqs_batch), &params, 3);
-                // bench_handover_typical_with_network(c, &mut typical_handover_client_state, &params, 3, case);
+                if with_network {
+                    bench_handover_typical_with_network(c, &mut typical_handover_client_state, &params, 3, case);
+                } else {
+                    let committee_1 = read_from_file!(&dir_name, "committee_1", CommitteeData);
+                    let committee_2 = read_from_file!(&dir_name, "committee_2", CommitteeData);
+                    let committee_3 = read_from_file!(&dir_name, "committee_3", CommitteeData);
+                    let prev_state = read_from_file!(&dir_name, "commstate_1_seat_idx", CommitteeStateClient);
+                    let commstate_2 = read_from_file!(&dir_name, "commstate_2_seat_idx", CommitteeStateClient);
+                    let public_state_epoch_3 = read_from_file!(&dir_name, "public_state_epoch_3", PublicState);
+                    let reqs_batch = read_from_file!(&dir_name, "requests_batch", RecoveryRequestBatch);
+                    bench_handover_typical(c, &mut typical_handover_client_state, &public_state_epoch_3, &committee_1, &committee_2, &committee_3, Some(&prev_state.coeff_cmts), &commstate_2, Some(&reqs_batch), &params, 3);
+                }
                 chorus::end_stat_tracking!(start);
 
                 let pwd = read_from_file!(&dir_name, "pwd", [u8; PWD_LEN]);

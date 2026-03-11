@@ -135,13 +135,41 @@ Repeat this step for each experiment you want to run.
 
 ### Available Experiments
 
-| # | ID | Description | What it does |
-|---|-----|-------------|-------------|
-| 1 | `figure5` | saVSS vs cgVSS (Figure 5) | Runs `sa_nivss` server benchmark on the compute VM, then `sa_nivss` and `pv_nivss` client benchmarks on the control VM. Parses all three logs and generates `nivss-time.png`, `nivss-comm.png`, and `nivss-legend.png`. |
+| # | ID | Description | Script |
+|---|-----|-------------|--------|
+| 1 | `figure5` | Figure 5: saVSS vs cgVSS runtime and communication | `experiments/generate_figure5.py` |
+| 2 | `table6` | Table 6: Secret-recovery client costs | `experiments/generate_table6.py` |
+| 3 | `table7` | Table 7: Client committee costs and sortition frequency | `experiments/generate_table7.py` |
+| 4 | `figure8` | Figure 8: Client cost breakdown | `experiments/generate_figure8.py` |
+| 5 | `table9` | Table 9: Server per-epoch costs | `experiments/generate_table9.py` |
+| 6 | `appendixA41` | Appendix A.4.1: One-time DKG setup costs | `experiments/generate_appendixA41.py` |
+| 7 | `table10` | Table 10: Parameter selection | `experiments/generate_table10.py` |
+| a | *all* | Run every experiment sequentially | — |
 
-The cases for the NIVSS benchmarks are defined in `config.json` under
-`nivss_cases`.  All experiment definitions live under
-`config.json → experiments`.
+Each generation script can also be run standalone from the command line
+(e.g. `python3 experiments/generate_table6.py --results-dir <log_dir>`).
+They import shared log-parsing utilities from `experiments/parse_nivss.py`
+and `experiments/parse_secret_recovery.py`.
+
+Experiments 2–6 share the same benchmark logs (`secret_recovery_server.log`
+and `secret_recovery_client.log`) under `results/secret_recovery/`.  The
+**first** experiment you run from this group executes the full benchmark
+(server + client with network limiting); subsequent ones detect the
+existing logs and offer to re-use them, generating only their specific
+output.
+
+The secret-recovery benchmark runs the server benchmark on the compute
+VM, starts the network server, **limits the network** between the VMs
+(75 Mbps, 280 ms RTT per `config.json`), auto-detects the compute VM's
+internal IP, then runs the client benchmark on the control VM over the
+limited network.  Network limits are removed after the benchmark
+completes.  Battery measurements are skipped (not running on a mobile
+phone).
+
+The cases and client counts are defined in `config.json` under
+`bench_cases` and `num_clients`.  NIVSS cases are under `nivss_cases`.
+All experiment definitions live under `config.json → experiments`.
+Network-limiting parameters are in `config.json → network_limit`.
 
 ---
 
@@ -165,3 +193,9 @@ performance results in the paper:
 | Experiment | Paper Reference |
 |------------|-----------------|
 | `figure5`  | **Figure 5** — saVSS vs cgVSS runtime and communication |
+| `table6`   | **Table 6** — Secret-recovery client costs |
+| `table7`   | **Table 7** — Client committee costs and frequency |
+| `figure8`  | **Figure 8** — Client cost breakdown |
+| `table9`   | **Table 9** — Server per-epoch costs |
+| `appendixA41` | **Appendix A.4.1** — One-time DKG setup costs |
+| `table10`  | **Table 10** — Parameter selection vs. corruption/offline fractions |
