@@ -72,7 +72,7 @@ experiments keep running.  Re-run `login.py` to reconnect.
 > **Note:** The paper reports numbers averaged over 10 Criterion runs.
 > To save evaluator time, the artifact defaults to a single run
 > (`"sample_size": 1` in `config.json`).  To match the paper,
-> set `"sample_size": 10` in `config.json` before running experiments with the expectation that they will take 10x longer.
+> set `"sample_size": 10` in `config.json` before running experiments.
 
 All parameters are read from `config.json` — nothing is hardcoded.
 Each experiment saves results to `results/<experiment_id>/<timestamp>/`.
