@@ -1,5 +1,5 @@
 {
-  "sample_size": 1,
+  "sample_size": 10,
   "compute_vm": {
     "name": "chorus-compute",
     "machine_type": "c2d-standard-112",

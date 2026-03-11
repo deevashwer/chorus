@@ -996,7 +996,9 @@ def _check_lock_or_exit():
         pass
     print("-" * 62)
     print()
-    print(f"  Another experiment is currently running:")
+    print(f"  An experiment is already running (possibly started by")
+    print(f"  another evaluator sharing this VM):")
+    print()
     print(f"    Experiment:  {exp_name}")
     print(f"    Started at:  {started}{elapsed}")
     print(f"    Expected:    ~{expected} min total")

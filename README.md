@@ -31,10 +31,6 @@ As a result:
   (75 Mbps bandwidth, 280 ms RTT) between two co-located VMs.
 - **Absolute timings may differ slightly** from the paper.  Relative
   comparisons and communication costs are unaffected.
-- **Benchmarks use a single Criterion run** by default (the paper
-  averaged over 10).  Change `"sample_size"` in `config.json` to `10`
-  to match the paper.
-
 ---
 
 ## Quick Start
@@ -68,11 +64,6 @@ experiments keep running.  Re-run `login.py` to reconnect.
 ---
 
 ## Experiments
-
-> **Note:** The paper reports numbers averaged over 10 Criterion runs.
-> To save evaluator time, the artifact defaults to a single run
-> (`"sample_size": 1` in `config.json`).  To match the paper,
-> set `"sample_size": 10` in `config.json` before running experiments.
 
 All parameters are read from `config.json` — nothing is hardcoded.
 Each experiment saves results to `results/<experiment_id>/<timestamp>/`.
