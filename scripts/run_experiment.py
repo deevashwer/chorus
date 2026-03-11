@@ -209,53 +209,58 @@ def expected_duration_str(exp: dict, timings: dict) -> str:
 # Existing-results detection (log files only — plots are cheap to regenerate)
 # ---------------------------------------------------------------------------
 
-def _resolve_experiment(exp_id: str) -> dict | None:
-    """Find the EXPERIMENTS entry for a given id."""
-    return next((e for e in EXPERIMENTS if e["id"] == exp_id), None)
+_EXP_CONFIG_KEY = {
+    "table9":      "secret_recovery",
+    "table6":      "secret_recovery",
+    "table7":      "secret_recovery",
+    "figure8":     "secret_recovery",
+    "appendixA41": "secret_recovery",
+}
+
+
+_SR_NEEDS_CLIENT = {
+    "table6": True,
+    "table7": True,
+    "figure8": True,
+    "table9": False,
+    "appendixA41": True,
+}
 
 
 def _expected_logs(exp_id: str) -> list[str]:
-    """Return the list of log filenames an experiment produces.
-
-    If the experiment has a ``log_source``, the steps are read from
-    that experiment's config instead.
-    """
-    entry = _resolve_experiment(exp_id)
-    config_id = (entry.get("log_source") if entry else None) or exp_id
-    if config_id not in CONFIG["experiments"]:
+    """Return the list of log filenames an experiment produces."""
+    config_key = _EXP_CONFIG_KEY.get(exp_id, exp_id)
+    if config_key not in CONFIG["experiments"]:
         return []
-    exp_cfg = CONFIG["experiments"][config_id]
-    return [step["log"] for step in exp_cfg["steps"]]
-
-
-def _results_group(exp_id: str) -> str:
-    """Return the results-directory base for an experiment.
-
-    Experiments that share a ``results_group`` write to the same
-    ``results/<group>/`` tree so they can share log files.
-    """
-    entry = _resolve_experiment(exp_id)
-    return (entry.get("results_group") if entry else None) or exp_id
+    steps = CONFIG["experiments"][config_key]["steps"]
+    if exp_id in _SR_NEEDS_CLIENT and not _SR_NEEDS_CLIENT[exp_id]:
+        return [s["log"] for s in steps if s["vm"] == "compute"]
+    return [s["log"] for s in steps]
 
 
 def find_existing_logs(exp_id: str) -> Path | None:
     """Return the most-recent run directory that contains all expected log
     files, or None if no complete set of logs exists."""
-    exp_base = RESULTS_DIR / _results_group(exp_id)
-    if not exp_base.is_dir():
-        return None
     expected = _expected_logs(exp_id)
     if not expected:
         return None
-    # Iterate timestamped subdirectories, newest first
-    subdirs = sorted(
-        (d for d in exp_base.iterdir() if d.is_dir()),
-        key=lambda d: d.name,
-        reverse=True,
-    )
-    for run_dir in subdirs:
-        if all((run_dir / name).exists() for name in expected):
-            return run_dir
+
+    config_key = _EXP_CONFIG_KEY.get(exp_id, exp_id)
+    search_dirs = [RESULTS_DIR / exp_id]
+    if config_key != exp_id:
+        search_dirs.append(RESULTS_DIR / config_key)
+
+    for exp_base in search_dirs:
+        if not exp_base.is_dir():
+            continue
+        subdirs = sorted(
+            (d for d in exp_base.iterdir() if d.is_dir()),
+            key=lambda d: d.name,
+            reverse=True,
+        )
+        for run_dir in subdirs:
+            if all((run_dir / name).exists() for name in expected):
+                return run_dir
     return None
 
 
@@ -274,11 +279,8 @@ def prompt_rerun(exp: dict) -> str:
 
     expected = _expected_logs(exp["id"])
 
-    group = _results_group(exp["id"])
-    src_label = (f"'{exp['id']}' (shared logs from '{group}')"
-                 if group != exp["id"] else f"'{exp['id']}'")
     print()
-    print(f"  📁  Experiment {src_label} already has log files:")
+    print(f"  Experiment '{exp['id']}' already has log files:")
     print(f"      {prev_dir}")
     print()
     for log_name in expected:
@@ -660,65 +662,60 @@ def run_figure5(project: str, zone: str, exp_dir: Path,
 
 
 # ---------------------------------------------------------------------------
-# Experiment: Secret Recovery — shared benchmark runner + per-output factories
+# Experiment: Secret Recovery — split into server-only and client runners
 # ---------------------------------------------------------------------------
 
-def _run_sr_benchmark(project: str, zone: str, exp_dir: Path):
-    """Run the secret-recovery server and client benchmarks.
+def _run_sr_server_benchmark(project: str, zone: str, exp_dir: Path):
+    """Run the server benchmark on the compute VM (BENCHMARK_TYPE=SERVER)."""
+    run_py = "python3 scripts/run.py"
+    print()
+    print("  Running SERVER benchmark on compute VM ...")
+    with timed("Server benchmark (compute VM)"):
+        sync_to_compute(project, zone)
+        remote_log = "/tmp/secret_recovery_server.log"
+        ssh_cmd(project, zone,
+                f"cd ~/chorus && "
+                f"{run_py} bench secret_recovery server "
+                f"2>&1 | tee {remote_log}",
+                log_path=None)
+        scp_from_compute(project, zone, remote_log,
+                         exp_dir / "secret_recovery_server.log")
 
-    Steps:
-      1. Server benchmark on compute VM  (BENCHMARK_TYPE=SERVER)
-      2. Copy pre-generated state directories to control VM
-      3. Start the Chorus network server on compute VM
-      4. Apply network limits  (bandwidth / RTT from config.json)
-      5. Client benchmark on control VM   (BENCHMARK_TYPE=CLIENT, WITH_NETWORK=1)
-      6. Remove network limits + stop server
+
+def _run_sr_client_benchmark(project: str, zone: str, exp_dir: Path):
+    """Run the client benchmark with network throttling.
+
+    Assumes the server log already exists in exp_dir (either from
+    _run_sr_server_benchmark or a previous run).
+
+    Steps: copy state dirs, start network server, apply network limits,
+    run client benchmark, clean up.
     """
     run_py = "python3 scripts/run.py"
     server_started = False
     network_limited = False
 
     try:
-        # --- 1. Server benchmark on compute VM ---
-        print()
-        print("  Running SERVER benchmark on compute VM ...")
-        with timed("Server benchmark (compute VM)"):
-            sync_to_compute(project, zone)
-            remote_log = "/tmp/secret_recovery_server.log"
-            ssh_cmd(project, zone,
-                    f"cd ~/chorus && "
-                    f"{run_py} bench secret_recovery server "
-                    f"2>&1 | tee {remote_log}",
-                    log_path=None)
-            scp_from_compute(project, zone, remote_log,
-                             exp_dir / "secret_recovery_server.log")
-
-        # --- 2. Copy state directories to control VM ---
         print()
         print("  Copying pre-generated state to control VM ...")
         with timed("Copy state directories"):
             copy_state_dirs(project, zone)
 
-        # --- 3. Start server on compute VM ---
         print()
         print("  Starting network server on compute VM ...")
         start_server_on_compute(project, zone)
         server_started = True
 
-        # --- 4. Ensure local build ---
         print()
         print("  Building on control VM (if needed) ...")
         ensure_local_build()
 
-        # --- 5. Get compute IP ---
         compute_ip = get_compute_ip(project, zone)
         print(f"    Compute VM internal IP: {compute_ip}")
 
-        # --- 6. Apply network limits ---
         apply_network_limit(project, zone)
         network_limited = True
 
-        # --- 7. Client benchmark on control VM ---
         print()
         print("  Running CLIENT benchmark on control VM ...")
         print("  (Network is limited to "
@@ -753,38 +750,42 @@ _SR_SCRIPTS = {
 }
 
 
-def make_secret_recovery_runner(generate_target: str):
-    """Create a run function that runs the SR benchmark (if needed) then
-    invokes the per-output generation script(s).
+def make_sr_runner(generate_target: str):
+    """Create a run function for a single SR output.
 
-    *generate_target* is ``"all"`` or one of the keys in ``_SR_SCRIPTS``.
+    table9 only needs the server log; everything else also needs the
+    client log (with network throttling).
     """
+    needs_client = _SR_NEEDS_CLIENT[generate_target]
+
     def runner(project: str, zone: str, exp_dir: Path,
                reuse_from: Path | None = None):
         if reuse_from is not None:
-            log_dir = reuse_from
             print()
-            print(f"  Reusing logs from {log_dir}")
+            print(f"  Reusing logs from {reuse_from}")
         else:
-            _run_sr_benchmark(project, zone, exp_dir)
-            log_dir = exp_dir
+            server_log = exp_dir / "secret_recovery_server.log"
+            if not server_log.exists():
+                _run_sr_server_benchmark(project, zone, exp_dir)
 
-        scripts = (list(_SR_SCRIPTS.values())
-                   if generate_target == "all"
-                   else [_SR_SCRIPTS[generate_target]])
-        label = "all tables & figures" if generate_target == "all" else generate_target
+            if needs_client:
+                client_log = exp_dir / "secret_recovery_client.log"
+                if not client_log.exists():
+                    _run_sr_client_benchmark(project, zone, exp_dir)
+
+        script = _SR_SCRIPTS[generate_target]
+        log_dir = reuse_from if reuse_from else exp_dir
 
         print()
-        print(f"  Generating {label} ...")
-        with timed(f"Generating {label}"):
+        print(f"  Generating {generate_target} ...")
+        with timed(f"Generating {generate_target}"):
             ensure_matplotlib()
-            for script in scripts:
-                run_local(
-                    [sys.executable,
-                     str(REPO_DIR / "experiments" / script),
-                     "--results-dir", str(log_dir),
-                     "--output-dir", str(exp_dir)],
-                )
+            run_local(
+                [sys.executable,
+                 str(REPO_DIR / "experiments" / script),
+                 "--results-dir", str(log_dir),
+                 "--output-dir", str(exp_dir)],
+            )
 
         print()
         print("  Generated files:")
@@ -822,8 +823,6 @@ def run_table10(project: str, zone: str, exp_dir: Path,
 # Experiment registry
 # ---------------------------------------------------------------------------
 
-_SR_MINUTES = CONFIG["experiments"]["secret_recovery"]["expected_minutes"]
-
 EXPERIMENTS = [
     {
         "id": "figure5",
@@ -831,52 +830,42 @@ EXPERIMENTS = [
         "expected_minutes": CONFIG["experiments"]["figure5"]["expected_minutes"],
         "run": run_figure5,
     },
-    # -- Secret-recovery outputs (all share the same benchmark logs) ---------
+    # -- Secret-recovery outputs (each gets its own results/<id>/ directory) --
+    {
+        "id": "table9",
+        "description": "Table 9: Server per-epoch costs (server benchmark only)",
+        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"],
+        "run": make_sr_runner("table9"),
+    },
     {
         "id": "table6",
         "description": "Table 6: Secret-recovery client costs",
-        "expected_minutes": _SR_MINUTES,
-        "log_source": "secret_recovery",
-        "results_group": "secret_recovery",
-        "run": make_secret_recovery_runner("table6"),
+        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"],
+        "run": make_sr_runner("table6"),
     },
     {
         "id": "table7",
         "description": "Table 7: Client committee costs and sortition frequency",
-        "expected_minutes": _SR_MINUTES,
-        "log_source": "secret_recovery",
-        "results_group": "secret_recovery",
-        "run": make_secret_recovery_runner("table7"),
+        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"],
+        "run": make_sr_runner("table7"),
     },
     {
         "id": "figure8",
         "description": "Figure 8: Client cost breakdown (time + communication)",
-        "expected_minutes": _SR_MINUTES,
-        "log_source": "secret_recovery",
-        "results_group": "secret_recovery",
-        "run": make_secret_recovery_runner("figure8"),
-    },
-    {
-        "id": "table9",
-        "description": "Table 9: Server per-epoch costs",
-        "expected_minutes": _SR_MINUTES,
-        "log_source": "secret_recovery",
-        "results_group": "secret_recovery",
-        "run": make_secret_recovery_runner("table9"),
+        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"],
+        "run": make_sr_runner("figure8"),
     },
     {
         "id": "appendixA41",
         "description": "Appendix A.4.1: One-time DKG setup costs",
-        "expected_minutes": _SR_MINUTES,
-        "log_source": "secret_recovery",
-        "results_group": "secret_recovery",
-        "run": make_secret_recovery_runner("appendixA41"),
+        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"],
+        "run": make_sr_runner("appendixA41"),
     },
     # -- Pure computation (no benchmarks) ------------------------------------
     {
         "id": "table10",
         "description": "Table 10: Parameter selection (n, threshold) vs. corruption/offline fractions",
-        "expected_minutes": 1,
+        "expected_minutes": CONFIG["experiments"]["table10"]["expected_minutes"],
         "run": run_table10,
     },
 ]
@@ -899,14 +888,12 @@ def _run_all(project: str, zone: str, timings: dict):
         print("=" * 62)
 
         reuse_from = find_existing_logs(exp_id)
-        group = _results_group(exp_id)
         if reuse_from is not None:
-            exp_dir = reuse_from
             print(f"  Reusing existing logs from {reuse_from}")
-        else:
-            ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-            exp_dir = RESULTS_DIR / group / ts
-            exp_dir.mkdir(parents=True, exist_ok=True)
+
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        exp_dir = RESULTS_DIR / exp_id / ts
+        exp_dir.mkdir(parents=True, exist_ok=True)
 
         start = time.time()
         try:
@@ -1045,15 +1032,9 @@ def main():
     signal.signal(signal.SIGINT, _cleanup)
     signal.signal(signal.SIGTERM, _cleanup)
 
-    group = _results_group(exp["id"])
-
-    if reuse_from is not None:
-        # Write outputs alongside the existing logs — no redundant copies.
-        exp_dir = reuse_from
-    else:
-        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        exp_dir = RESULTS_DIR / group / ts
-        exp_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    exp_dir = RESULTS_DIR / exp["id"] / ts
+    exp_dir.mkdir(parents=True, exist_ok=True)
 
     start = time.time()
     try:

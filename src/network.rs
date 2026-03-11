@@ -242,7 +242,7 @@ fn selected_cases() -> Vec<usize> {
         config["bench_cases"].as_array()
             .expect("config.json must have a bench_cases array")
             .iter()
-            .map(|c| c["case"].as_u64().expect("each bench_case must have a 'case' number") as usize)
+            .map(|c: &serde_json::Value| c["case"].as_u64().expect("each bench_case must have a 'case' number") as usize)
             .collect()
     }
 }
@@ -257,7 +257,7 @@ fn selected_num_clients() -> Vec<usize> {
         config["num_clients"].as_array()
             .expect("config.json must have a num_clients array")
             .iter()
-            .map(|v| parse_num_clients_str(v.as_str().expect("num_clients entries must be strings")))
+            .map(|v: &serde_json::Value| parse_num_clients_str(v.as_str().expect("num_clients entries must be strings")))
             .collect()
     }
 }
