@@ -254,7 +254,7 @@ impl ECPSSClient {
                 }
             }
             Ok(())
-        }).collect::<Result<_, InvalidCommittee>>()?;
+        }).collect::<Result<Vec<()>, InvalidCommittee>>()?;
         // verify committee size >= threshold
         if committee.members.len() < params.threshold {
             return Err(InvalidCommittee::SmallerThanThreshold);
@@ -307,7 +307,7 @@ impl ECPSSClient {
                 }
             }
             Ok(())
-        }).collect::<Result<_, InvalidCommittee>>()?;
+        }).collect::<Result<Vec<()>, InvalidCommittee>>()?;
         Ok(())
     }
 
