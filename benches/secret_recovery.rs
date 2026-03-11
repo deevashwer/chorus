@@ -530,7 +530,7 @@ fn benches_class(c: &mut Criterion) {
 
         let expected_committee_size = committee_size; // worst case
         let max_handovers_needed = 2 * threshold; // 2 * threshold because at most threshold - 1 clients can be corrupted and send malformed handovers
-        println!("expected_committee_size: {}, max_handovers_needed: {}", expected_committee_size, expected_online_committee_members, max_handovers_needed);
+        println!("expected_committee_size: {}, max_handovers_needed: {}", expected_committee_size, max_handovers_needed);
         let (mut clients_state, mut server_state) = match benchmark_type {
             BenchmarkType::SaveState | BenchmarkType::Server => {
                 // create folder for info about this case
