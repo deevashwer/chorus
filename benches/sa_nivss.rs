@@ -41,12 +41,27 @@ impl BenchmarkType {
     }
 }
 
-const BENCH_CASES: [(usize, usize, usize, usize); 4] = [
-    (1, 1, 105, 561),
-    (2, 10, 300, 1090),
-    (3, 19, 719, 2123),
-    (4, 27, 1659, 4292),
-];
+/// Reads config.json from the repo root and returns it as a serde_json::Value.
+fn load_config() -> serde_json::Value {
+    let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config.json");
+    let data = std::fs::read_to_string(&config_path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", config_path.display(), e));
+    serde_json::from_str(&data)
+        .unwrap_or_else(|e| panic!("Failed to parse {}: {}", config_path.display(), e))
+}
+
+fn nivss_cases_from_config(config: &serde_json::Value) -> Vec<(usize, usize, usize, usize)> {
+    config["nivss_cases"].as_array().expect("nivss_cases must be an array")
+        .iter()
+        .map(|c| {
+            let case = c["case"].as_u64().unwrap() as usize;
+            let fraction = c["fraction"].as_u64().unwrap() as usize;
+            let threshold = c["threshold"].as_u64().unwrap() as usize;
+            let committee_size = c["committee_size"].as_u64().unwrap() as usize;
+            (case, fraction, threshold, committee_size)
+        })
+        .collect()
+}
 
 fn benches_class(c: &mut Criterion) {
     let bench_dealing = |c: &mut Criterion,
@@ -69,10 +84,11 @@ fn benches_class(c: &mut Criterion) {
                          threshold: usize,
                          sig_key: &mut SigningKey,
                          i: usize,
-                         sk: &CL_HSM_SecretKey| {
+                         sk: &CL_HSM_SecretKey,
+                         receive_parallel: usize| {
         c.bench_function(&format!("receive"), move |b| {
             b.iter(||
-                cfg_into_iter_client!((0..64)).for_each(|_| {
+                cfg_into_iter_client!((0..receive_parallel)).for_each(|_| {
                     nivss.receive(&sid, &dealing, threshold, &sig_key.verifying_key(), i, &sk, None).expect("receive failed");
                 })
             )
@@ -107,11 +123,11 @@ fn benches_class(c: &mut Criterion) {
     let seed = Integer::from_str_radix("42", 10).expect("Integer: from_str_radix failed");
     let cl = CL_HSM::new(&q, &seed, 128);
 
-    for (case, f, t, n) in BENCH_CASES.iter() {
-        let case = *case;
-        let f = *f;
-        let threshold = *t;
-        let committee_size = *n;
+    let config = load_config();
+    let bench_cases = nivss_cases_from_config(&config);
+    let receive_parallel = config["nivss_receive_parallel"].as_u64().unwrap() as usize;
+
+    for &(case, f, threshold, committee_size) in &bench_cases {
         println!("case: {}, fraction: {}, committee_size: {}, threshold: {}", case, f, committee_size, threshold);
 
         let mut rng = ark_std::test_rng();
@@ -148,7 +164,7 @@ fn benches_class(c: &mut Criterion) {
             chorus::end_stat_tracking!(start);
 
             let start = chorus::start_stat_tracking!();
-            bench_receive(c, &nivss, &sid, &lite_dealings[0], threshold, &mut sig_key, 0, &pke_seckeys[0]);
+            bench_receive(c, &nivss, &sid, &lite_dealings[0], threshold, &mut sig_key, 0, &pke_seckeys[0], receive_parallel);
             chorus::end_stat_tracking!(start);
         } else if benchmark_type == BenchmarkType::Server {
             let start = chorus::start_stat_tracking!();

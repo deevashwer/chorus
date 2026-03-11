@@ -14,7 +14,7 @@ use ark_std::cfg_into_iter;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-const PORT: &str = "32000";
+const DEFAULT_PORT: &str = "32000";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientDownloadContribute {
@@ -244,7 +244,7 @@ fn selected_num_clients() -> Vec<usize> {
 }
 
 pub fn server_port() -> String {
-    std::env::var("SERVER_PORT").unwrap_or_else(|_| PORT.to_string())
+    std::env::var("SERVER_PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string())
 }
 
 pub type NetworkResponses = HashMap<NetworkRequest, Vec<u8>>;

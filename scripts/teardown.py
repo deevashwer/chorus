@@ -7,11 +7,19 @@ Usage:
     python3 ~/chorus/scripts/teardown.py
 """
 
+import json
 import subprocess
 import sys
+import time
 import urllib.request
+from pathlib import Path
 
-COMPUTE_VM_NAME = "chorus-compute"
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
+
+with open(CONFIG_PATH) as _f:
+    CONFIG = json.load(_f)
+
+COMPUTE_VM_NAME = CONFIG["compute_vm"]["name"]
 
 
 def metadata(path: str) -> str:
@@ -51,10 +59,12 @@ def main():
 
     print()
     print(f"  Deleting '{COMPUTE_VM_NAME}'...")
+    t0 = time.time()
     r = subprocess.run([
         "gcloud", "compute", "instances", "delete", COMPUTE_VM_NAME,
         "--project", project, "--zone", zone, "--quiet",
     ])
+    elapsed = time.time() - t0
 
     if r.returncode == 0:
         print(f"  Done — '{COMPUTE_VM_NAME}' has been deleted.")
@@ -62,7 +72,8 @@ def main():
         print(f"  Deletion failed (exit code {r.returncode}).")
         sys.exit(r.returncode)
 
-    print()
+    m, s = divmod(int(elapsed), 60)
+    print(f"\n  ⏱  Tear down: {m}m {s}s")
 
 
 if __name__ == "__main__":

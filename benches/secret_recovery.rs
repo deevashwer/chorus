@@ -60,55 +60,86 @@ impl BenchmarkType {
     }
 }
 
-const ALL_BENCH_CASES: [(usize, (usize, usize), usize, usize); 2] = [
-    (1, (10, 50), 300, 1090),
-    (2, (1, 75), 121, 1214),
-];
+/// Reads config.json from the repo root and returns it as a serde_json::Value.
+fn load_config() -> serde_json::Value {
+    let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config.json");
+    let data = std::fs::read_to_string(&config_path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", config_path.display(), e));
+    serde_json::from_str(&data)
+        .unwrap_or_else(|e| panic!("Failed to parse {}: {}", config_path.display(), e))
+}
 
-const ALL_NUM_CLIENTS: [usize; 3] = [
-    10usize.pow(6),
-    10usize.pow(7),
-    10usize.pow(8),
-];
+fn all_bench_cases_from_config(config: &serde_json::Value) -> Vec<(usize, (usize, usize), usize, usize)> {
+    config["bench_cases"].as_array().expect("bench_cases must be an array")
+        .iter()
+        .map(|c| {
+            let case = c["case"].as_u64().unwrap() as usize;
+            let corrupt_fraction = c["corrupt_fraction"].as_u64().unwrap() as usize;
+            let fail_fraction = c["fail_fraction"].as_u64().unwrap() as usize;
+            let threshold = c["threshold"].as_u64().unwrap() as usize;
+            let committee_size = c["committee_size"].as_u64().unwrap() as usize;
+            (case, (corrupt_fraction, fail_fraction), threshold, committee_size)
+        })
+        .collect()
+}
+
+fn parse_client_count(s: &str) -> usize {
+    let s = s.trim().to_uppercase();
+    match s.as_str() {
+        "1M" => 10usize.pow(6),
+        "10M" => 10usize.pow(7),
+        "100M" => 10usize.pow(8),
+        "1B" => 10usize.pow(9),
+        other => other.parse::<usize>().expect("NUM_CLIENTS entries must be 1M, 10M, 100M, or a raw number"),
+    }
+}
+
+fn all_num_clients_from_config(config: &serde_json::Value) -> Vec<usize> {
+    config["num_clients"].as_array().expect("num_clients must be an array")
+        .iter()
+        .map(|v| parse_client_count(v.as_str().unwrap()))
+        .collect()
+}
 
 fn selected_cases() -> Vec<(usize, (usize, usize), usize, usize)> {
+    let config = load_config();
+    let all = all_bench_cases_from_config(&config);
     if let Ok(val) = env::var("BENCH_CASES") {
         let indices: Vec<usize> = val.split(',')
-            .map(|s| s.trim().parse::<usize>().expect("BENCH_CASES must be comma-separated case numbers (1 or 2)"))
+            .map(|s| s.trim().parse::<usize>().expect("BENCH_CASES must be comma-separated case numbers"))
             .collect();
-        ALL_BENCH_CASES.iter()
+        all.into_iter()
             .filter(|(id, ..)| indices.contains(id))
-            .cloned()
             .collect()
     } else {
-        ALL_BENCH_CASES.to_vec()
+        all
     }
 }
 
 fn selected_num_clients() -> Vec<usize> {
+    let config = load_config();
+    let all = all_num_clients_from_config(&config);
     if let Ok(val) = env::var("NUM_CLIENTS") {
         val.split(',')
-            .map(|s| {
-                let s = s.trim().to_uppercase();
-                match s.as_str() {
-                    "1M" => 10usize.pow(6),
-                    "10M" => 10usize.pow(7),
-                    "100M" => 10usize.pow(8),
-                    other => other.parse::<usize>().expect("NUM_CLIENTS entries must be 1M, 10M, 100M, or a raw number"),
-                }
-            })
+            .map(|s| parse_client_count(s))
             .collect()
     } else {
-        ALL_NUM_CLIENTS.to_vec()
+        all
     }
 }
 
 fn network_ip_for_clients() -> String {
-    env::var("SERVER_IP").unwrap_or_else(|_| "0.0.0.0".to_string())
+    env::var("SERVER_IP").unwrap_or_else(|_| {
+        let config = load_config();
+        config["network"]["server_ip"].as_str().unwrap_or("0.0.0.0").to_string()
+    })
 }
 
 fn network_ip_for_server() -> String {
-    env::var("SERVER_BIND_IP").unwrap_or_else(|_| "0.0.0.0".to_string())
+    env::var("SERVER_BIND_IP").unwrap_or_else(|_| {
+        let config = load_config();
+        config["network"]["server_ip"].as_str().unwrap_or("0.0.0.0").to_string()
+    })
 }
 
 fn unique_elements<T: std::hash::Hash + Eq + Clone>(vec: Vec<T>) -> Vec<T> {

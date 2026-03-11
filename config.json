@@ -1,0 +1,41 @@
+{
+  "compute_vm": {
+    "name": "chorus-compute",
+    "machine_type": "c2d-standard-112",
+    "boot_disk_size": "200GB",
+    "image_family": "ubuntu-2204-lts",
+    "image_project": "ubuntu-os-cloud"
+  },
+  "bench_cases": [
+    {
+      "case": 1,
+      "corrupt_fraction": 10,
+      "fail_fraction": 50,
+      "threshold": 30,
+      "committee_size": 100
+    }
+  ],
+  "nivss_cases": [
+    { "case": 1, "fraction": 1,  "threshold": 10,  "committee_size": 50 }
+  ],
+  "nivss_receive_parallel": 8,
+  "num_clients": ["1M"],
+  "network": {
+    "server_ip": "0.0.0.0",
+    "server_port": 32000
+  },
+  "experiments": {
+    "figure5": {
+      "description": "Figure 5: saVSS vs cgVSS runtime and communication",
+      "expected_minutes": 120,
+      "server_vm": "compute",
+      "client_vm": "control",
+      "steps": [
+        { "vm": "compute", "bench": "sa_nivss", "mode": "server", "log": "sa_nivss_server.log" },
+        { "vm": "control", "bench": "sa_nivss", "mode": "client", "log": "sa_nivss_client_parallel.log" },
+        { "vm": "control", "bench": "pv_nivss", "mode": null,     "log": "pv_nivss_client_parallel.log" }
+      ],
+      "plots": ["nivss-time.png", "nivss-comm.png", "nivss-legend.png"]
+    }
+  }
+}

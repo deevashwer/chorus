@@ -43,6 +43,7 @@ bytes = { version = "^1.1.0", features = ["serde"] }
 
 [dev-dependencies]
 criterion = ">=0.2"
+serde_json = "1.0"
 
 [patch.crates-io]
 gmp-mpfr-sys = { path = "./gmp-mpfr-sys/" } # a patch that allows for cross-compilation to Android

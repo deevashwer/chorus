@@ -12,7 +12,7 @@ Features:
     - Interactive menu of experiments with expected durations
     - File-based locking prevents concurrent experiments
     - Timing database tracks past run durations
-    - Logs saved to ~/results/<experiment>/
+    - Logs saved to results/<experiment>/
     - You can detach from screen (Ctrl-A D) while an experiment runs
       and reconnect later to see the output
 """
@@ -27,32 +27,17 @@ import time
 import urllib.request
 from pathlib import Path
 
-RESULTS_DIR = Path.home() / "results"
+REPO_DIR = Path(__file__).resolve().parent.parent
+RESULTS_DIR = REPO_DIR / "results"
 LOCK_FILE = RESULTS_DIR / "lock.json"
 TIMINGS_FILE = RESULTS_DIR / "timings.json"
 
-COMPUTE_VM_NAME = "chorus-compute"
+CONFIG_PATH = REPO_DIR / "config.json"
 
-EXPERIMENTS = [
-    {
-        "id": "generate",
-        "description": "Generate benchmark state (all cases, all client counts)",
-        "command": "python3 scripts/run.py generate",
-        "expected_minutes": 120,
-    },
-    {
-        "id": "bench-server",
-        "description": "Server benchmark (all cases, all client counts)",
-        "command": "python3 scripts/run.py bench server",
-        "expected_minutes": 180,
-    },
-    {
-        "id": "bench-client",
-        "description": "Client benchmark (all cases, all client counts)",
-        "command": "python3 scripts/run.py bench client",
-        "expected_minutes": 180,
-    },
-]
+with open(CONFIG_PATH) as _f:
+    CONFIG = json.load(_f)
+
+COMPUTE_VM_NAME = CONFIG["compute_vm"]["name"]
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +58,78 @@ def gcp_project() -> str:
 def gcp_zone() -> str:
     full = metadata("instance/zone")
     return full.rsplit("/", 1)[-1]
+
+
+# ---------------------------------------------------------------------------
+# Helpers — timing
+# ---------------------------------------------------------------------------
+
+def fmt_elapsed(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h:
+        return f"{h}h {m}m {s}s"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+class timed:
+    """Context manager that prints wall-clock time for a block."""
+    def __init__(self, label: str):
+        self.label = label
+        self.elapsed = 0.0
+    def __enter__(self):
+        self.t0 = time.time()
+        return self
+    def __exit__(self, *_):
+        self.elapsed = time.time() - self.t0
+        print(f"\n  ⏱  {self.label}: {fmt_elapsed(self.elapsed)}")
+
+
+# ---------------------------------------------------------------------------
+# Helpers — running commands
+# ---------------------------------------------------------------------------
+
+def run_local(cmd, *, cwd=None, log_path=None, env_extra=None):
+    """Run a command locally, streaming output and optionally saving to a log."""
+    env = os.environ.copy()
+    if env_extra:
+        env.update(env_extra)
+    print(f"    $ {' '.join(str(c) for c in cmd)}")
+    if log_path:
+        with open(log_path, "w") as log_fh:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, cwd=cwd or REPO_DIR, env=env,
+            )
+            for line in proc.stdout:
+                sys.stdout.write("    " + line)
+                log_fh.write(line)
+            proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(f"Command failed (exit {proc.returncode}): {' '.join(str(c) for c in cmd)}")
+    else:
+        subprocess.run(cmd, cwd=cwd or REPO_DIR, env=env, check=True)
+
+
+def ssh_cmd(project, zone, command, *, log_path=None):
+    """Run a command on the compute VM via SSH, streaming output."""
+    cmd = [
+        "gcloud", "compute", "ssh", COMPUTE_VM_NAME,
+        "--project", project, "--zone", zone, "--",
+        f"bash -lc '{command}'",
+    ]
+    run_local(cmd, log_path=log_path)
+
+
+def scp_from_compute(project, zone, remote_path, local_path):
+    """Copy a file from the compute VM to the local machine."""
+    subprocess.run([
+        "gcloud", "compute", "scp",
+        f"{COMPUTE_VM_NAME}:{remote_path}", str(local_path),
+        "--project", project, "--zone", zone,
+    ], check=True)
 
 
 # ---------------------------------------------------------------------------
@@ -148,65 +205,249 @@ def expected_duration_str(exp: dict, timings: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Plot generation (stub — will be filled in later)
+# Existing-results detection (log files only — plots are cheap to regenerate)
 # ---------------------------------------------------------------------------
 
-def generate_plots(experiment_id: str, log_path: Path):
-    print(f"    Plot generation not yet implemented for '{experiment_id}'.")
+def _expected_logs(exp_id: str) -> list[str]:
+    """Return the list of log filenames an experiment produces."""
+    exp_cfg = CONFIG.get("experiments", {}).get(exp_id, {})
+    return [step["log"] for step in exp_cfg.get("steps", [])]
+
+
+def find_existing_logs(exp_id: str) -> Path | None:
+    """Return the most-recent run directory that contains all expected log
+    files, or None if no complete set of logs exists."""
+    exp_base = RESULTS_DIR / exp_id
+    if not exp_base.is_dir():
+        return None
+    expected = _expected_logs(exp_id)
+    if not expected:
+        return None
+    # Iterate timestamped subdirectories, newest first
+    subdirs = sorted(
+        (d for d in exp_base.iterdir() if d.is_dir()),
+        key=lambda d: d.name,
+        reverse=True,
+    )
+    for run_dir in subdirs:
+        if all((run_dir / name).exists() for name in expected):
+            return run_dir
+    return None
+
+
+def prompt_rerun(exp: dict) -> str:
+    """Check for existing log files and ask what to do.
+
+    Returns:
+        'run'   — no prior logs, run from scratch
+        'reuse' — user chose to reuse existing logs (just re-plot)
+        'rerun' — user chose to re-run benchmarks
+        'skip'  — user cancelled
+    """
+    prev_dir = find_existing_logs(exp["id"])
+    if prev_dir is None:
+        return "run"
+
+    expected = _expected_logs(exp["id"])
+
+    print()
+    print(f"  📁  Experiment '{exp['id']}' already has log files:")
+    print(f"      {prev_dir}")
+    print()
+    for log_name in expected:
+        p = prev_dir / log_name
+        size = p.stat().st_size
+        print(f"        {log_name:40s}  ({size:,} bytes)")
+    print()
+    print("  Options:")
+    print("    [u] Use existing logs — skip benchmarks, just re-plot")
+    print("    [r] Re-run benchmarks from scratch")
+    print("    [s] Skip — do nothing")
+    print()
+    try:
+        answer = input("  Choice [u/r/s]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return "skip"
+
+    if answer in ("u", "use"):
+        return "reuse"
+    elif answer in ("r", "rerun"):
+        return "rerun"
+    else:
+        return "skip"
 
 
 # ---------------------------------------------------------------------------
-# Experiment execution
+# Build / sync helpers
 # ---------------------------------------------------------------------------
 
-def run_experiment(exp: dict, project: str, zone: str):
-    exp_id = exp["id"]
-    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    exp_dir = RESULTS_DIR / exp_id
-    exp_dir.mkdir(parents=True, exist_ok=True)
-    log_path = exp_dir / f"{ts}.log"
+def sync_to_compute(project: str, zone: str):
+    """Sync the local repo to the compute VM and rebuild.
 
-    cmd = [
-        "gcloud", "compute", "ssh", COMPUTE_VM_NAME,
-        "--project", project, "--zone", zone, "--",
-        f"bash -lc 'cd ~/chorus && {exp['command']}'",
-    ]
+    Uses the same tar-based approach as setup_eval.py (respects .gitignore,
+    excludes .git/).  Then rebuilds so the compute VM has up-to-date
+    scripts and binaries.
+    """
+    gitignore = REPO_DIR / ".gitignore"
+    exclude_args = ["--exclude=.git"]
+    if gitignore.is_file():
+        for line in gitignore.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                exclude_args.append(f"--exclude={line.rstrip('/')}")
 
-    print()
-    print(f"    Command:  {exp['command']}")
-    print(f"    Log file: {log_path}")
-    print()
-    print("    Output will stream below.  You can safely detach from")
-    print("    screen (Ctrl-A D) — the experiment keeps running.")
-    print()
-    print("    " + "-" * 54)
+    archive = "/tmp/chorus-repo.tar.gz"
+    print("    Creating archive of local repo...")
+    run_local(
+        ["tar", "czf", archive] + exclude_args +
+        ["-C", str(REPO_DIR.parent), REPO_DIR.name],
+    )
+    print("    Copying to compute VM...")
+    run_local([
+        "gcloud", "compute", "scp", archive,
+        f"{COMPUTE_VM_NAME}:/tmp/chorus-repo.tar.gz",
+        "--project", project, "--zone", zone,
+    ])
+    print("    Extracting on compute VM...")
+    ssh_cmd(project, zone,
+            "mkdir -p ~/chorus && tar xzf /tmp/chorus-repo.tar.gz "
+            "--strip-components=1 -C ~/chorus && rm /tmp/chorus-repo.tar.gz")
+    print("    Rebuilding on compute VM...")
+    ssh_cmd(project, zone, "cd ~/chorus && python3 scripts/run.py build")
 
-    start = time.time()
-    with open(log_path, "w") as log_fh:
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+
+def ensure_local_build():
+    """Ensure the control VM has Rust and the project is built."""
+    # Check if cargo is available
+    r = subprocess.run(["bash", "-lc", "command -v cargo"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        print("    Rust not found on control VM — installing deps...")
+        run_local(["bash", "scripts/setup_deps.sh"], cwd=REPO_DIR)
+
+    print("    Building on control VM (if needed)...")
+    run_local(
+        ["bash", "-lc", "cd ~/chorus && python3 scripts/run.py build"],
+        cwd=REPO_DIR,
+    )
+
+
+def ensure_matplotlib():
+    """Ensure matplotlib and numpy are available for plotting."""
+    try:
+        import matplotlib  # noqa: F401
+    except ImportError:
+        print("    Installing matplotlib and numpy for plotting...")
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet",
+             "matplotlib", "numpy"],
+            check=True,
         )
-        for line in proc.stdout:
-            sys.stdout.write("    " + line)
-            log_fh.write(line)
-        proc.wait()
-    print("    " + "-" * 54)
 
-    duration = time.time() - start
 
-    if proc.returncode != 0:
+# ---------------------------------------------------------------------------
+# Experiment: Figure 5 — saVSS vs cgVSS
+# ---------------------------------------------------------------------------
+
+def run_figure5(project: str, zone: str, exp_dir: Path,
+                reuse_from: Path | None = None):
+    """Run Figure 5: saVSS vs cgVSS (NIVSS benchmarks).
+
+    If *reuse_from* is set, benchmark logs are copied from that directory
+    and only the plotting step is executed.
+
+    Steps (when running from scratch):
+      1. sa_nivss verify-dealing on compute VM  (server mode)
+      2. sa_nivss + pv_nivss deal/receive on control VM  (client modes)
+      3. Generate plots
+    """
+    import shutil
+
+    exp_cfg = CONFIG.get("experiments", {}).get("figure5", {})
+    steps = exp_cfg.get("steps", [])
+    run_py = "python3 scripts/run.py"
+
+    if reuse_from is not None:
         print()
-        print(f"    Experiment '{exp_id}' FAILED (exit code {proc.returncode}).")
-        print(f"    Check the log for details: {log_path}")
-        return False, duration
+        print(f"  Reusing logs from {reuse_from}")
+        for step in steps:
+            src = reuse_from / step["log"]
+            dst = exp_dir / step["log"]
+            shutil.copy2(src, dst)
+            print(f"    ✓ {step['log']}")
+    else:
+        # Group steps by VM
+        compute_steps = [s for s in steps if s["vm"] == "compute"]
+        control_steps = [s for s in steps if s["vm"] == "control"]
 
-    save_timing(exp_id, duration)
-    generate_plots(exp_id, log_path)
+        # --- Compute VM benchmarks ---
+        if compute_steps:
+            print()
+            print("  Running benchmarks on compute VM ...")
+            with timed("Compute VM benchmarks"):
+                sync_to_compute(project, zone)
+                for step in compute_steps:
+                    bench = step["bench"]
+                    mode = step.get("mode")
+                    log_name = step["log"]
+                    bench_cmd = f"{run_py} bench {bench}" + (f" {mode}" if mode else "")
+                    remote_log = f"/tmp/{log_name}"
+                    ssh_cmd(project, zone,
+                            f"cd ~/chorus && {bench_cmd} 2>&1"
+                            f" | tee {remote_log}")
+                    scp_from_compute(project, zone, remote_log,
+                                     exp_dir / log_name)
 
+        # --- Control VM benchmarks ---
+        if control_steps:
+            print()
+            print("  Running benchmarks on control VM ...")
+            with timed("Control VM benchmarks"):
+                ensure_local_build()
+                for step in control_steps:
+                    bench = step["bench"]
+                    mode = step.get("mode")
+                    log_name = step["log"]
+                    log_path = exp_dir / log_name
+                    bench_cmd = f"{run_py} bench {bench}" + (f" {mode}" if mode else "")
+                    run_local(
+                        ["bash", "-c",
+                         f"cd {REPO_DIR} && {bench_cmd} 2>&1"
+                         f" | tee {log_path}"],
+                    )
+
+    # Plot (always runs — cheap)
     print()
-    print(f"    Experiment '{exp_id}' completed in {duration / 60:.1f} minutes.")
-    print(f"    Log saved to: {log_path}")
-    return True, duration
+    print("  Generating plots ...")
+    with timed("Plotting"):
+        ensure_matplotlib()
+        run_local(
+            [sys.executable, str(REPO_DIR / "experiments" / "plot_nivss.py"),
+             "--results-dir", str(exp_dir)],
+        )
+
+    # List generated files
+    print()
+    print("  Generated files:")
+    for f in sorted(exp_dir.iterdir()):
+        size = f.stat().st_size
+        print(f"    {f.name:40s}  ({size:,} bytes)")
+
+
+# ---------------------------------------------------------------------------
+# Experiment registry
+# ---------------------------------------------------------------------------
+
+EXPERIMENTS = [
+    {
+        "id": "figure5",
+        "description": "Figure 5: saVSS vs cgVSS runtime and communication",
+        "expected_minutes": CONFIG.get("experiments", {})
+                                  .get("figure5", {})
+                                  .get("expected_minutes", 120),
+        "run": run_figure5,
+    },
+]
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +460,9 @@ def print_menu(timings: dict):
     print()
     for i, exp in enumerate(EXPERIMENTS, 1):
         dur = expected_duration_str(exp, timings)
-        print(f"    {i}. [{exp['id']}]  {exp['description']}")
+        done = find_existing_logs(exp["id"])
+        status = "  ✅ logs exist" if done else ""
+        print(f"    {i}. [{exp['id']}]  {exp['description']}{status}")
         print(f"       Expected duration: {dur}")
     print()
     print("    0. Exit")
@@ -232,8 +475,8 @@ def main():
     print("  Chorus Experiment Runner")
     print("=" * 62)
     print()
-    print("  This script runs a benchmark experiment on the compute VM")
-    print("  and saves the results to ~/results/.")
+    print("  This script runs benchmark experiments across the control")
+    print("  and compute VMs and saves results to results/.")
     print()
     print("  You are inside a screen session, so you can safely detach")
     print("  (Ctrl-A D) while an experiment is running.  Re-run")
@@ -287,8 +530,21 @@ def main():
 
     exp = EXPERIMENTS[choice - 1]
 
+    # Check whether log files already exist from a previous run
+    action = prompt_rerun(exp)
+    if action == "skip":
+        print("  Skipping — nothing changed.")
+        return
+
+    reuse_from = None
+    if action == "reuse":
+        reuse_from = find_existing_logs(exp["id"])
+
     print()
-    print(f"  Starting experiment: {exp['id']}")
+    if reuse_from:
+        print(f"  Re-plotting experiment: {exp['id']}  (reusing existing logs)")
+    else:
+        print(f"  Starting experiment: {exp['id']}")
     print(f"  {exp['description']}")
 
     acquire_lock(exp["id"], exp["expected_minutes"])
@@ -300,13 +556,33 @@ def main():
     signal.signal(signal.SIGINT, _cleanup)
     signal.signal(signal.SIGTERM, _cleanup)
 
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    exp_dir = RESULTS_DIR / exp["id"] / ts
+    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    start = time.time()
     try:
-        success, _ = run_experiment(exp, project, zone)
+        exp["run"](project, zone, exp_dir, reuse_from=reuse_from)
+        success = True
+    except Exception as e:
+        print(f"\n  Experiment '{exp['id']}' FAILED: {e}")
+        success = False
     finally:
         release_lock()
 
+    duration = time.time() - start
+    if success:
+        save_timing(exp["id"], duration)
+
     print()
     print("=" * 62)
+    if success:
+        print(f"  Experiment '{exp['id']}' completed in {fmt_elapsed(duration)}.")
+        print(f"  Results saved to: {exp_dir}")
+    else:
+        print(f"  Experiment '{exp['id']}' failed after {fmt_elapsed(duration)}.")
+        print(f"  Check logs in: {exp_dir}")
+    print()
     print("  What to do next:")
     print()
     print("  • Run another experiment:")

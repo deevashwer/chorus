@@ -6,20 +6,12 @@
 # Usage:  cd ~/chorus && bash scripts/setup.sh
 set -e
 
+SETUP_START=$SECONDS
+
 echo "=== Chorus VM Setup ==="
 
-# System packages
-echo "Installing system packages..."
-sudo apt-get update -qq
-sudo apt-get install -y --no-install-recommends \
-    libgmp-dev libmpfr-dev libssl-dev m4 build-essential pkg-config \
-    cmake python3 curl
-
-# Rust
-if ! command -v cargo &>/dev/null; then
-    echo "Installing Rust..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-fi
+# System packages & Rust
+bash scripts/setup_deps.sh
 . "$HOME/.cargo/env"
 
 # Build
@@ -28,4 +20,4 @@ python3 scripts/run.py build
 # Generate benchmark state
 python3 scripts/run.py generate
 
-echo "=== Setup complete ==="
+echo "=== Setup complete — total: $(( SECONDS - SETUP_START ))s ==="
