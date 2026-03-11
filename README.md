@@ -31,6 +31,9 @@ As a result:
   (75 Mbps bandwidth, 280 ms RTT) between two co-located VMs.
 - **Absolute timings may differ slightly** from the paper.  Relative
   comparisons and communication costs are unaffected.
+- **Benchmarks use a single Criterion run** by default (the paper
+  averaged over 10).  Change `"sample_size"` in `config.json` to `10`
+  to match the paper.
 
 ---
 
@@ -42,9 +45,12 @@ IP address.  Your local machine needs Python 3 and an SSH client.
 | Step | Command | Est. time |
 |------|---------|-----------|
 | Log in to the control VM | `python3 scripts/login.py` | ~30 s |
-| Set up the compute VM (idempotent) | `python3 ~/chorus/scripts/setup_eval.py` | ~20 min |
+| Set up the compute VM (idempotent) | `python3 ~/chorus/scripts/setup_eval.py` | ~3 h 10 min* |
 | Run all experiments | `python3 ~/chorus/scripts/run_experiment.py all` | ~3 h |
 | Tear down compute VM | `python3 ~/chorus/scripts/teardown.py` | ~1 min |
+
+\* Most of the setup time (~3 h 5 min) is spent preprocessing
+state; VM setup and building the artifact takes only ~5 min.
 
 You can also run `run_experiment.py` without arguments for an
 interactive menu, or pass a single experiment ID (e.g. `table6`).
@@ -63,12 +69,17 @@ experiments keep running.  Re-run `login.py` to reconnect.
 
 ## Experiments
 
+> **Note:** The paper reports numbers averaged over 10 Criterion runs.
+> To save evaluator time, the artifact defaults to a single run
+> (`"sample_size": 1` in `config.json`).  To match the paper,
+> set `"sample_size": 10` in `config.json` before running experiments with the expectation that they will take 10x longer.
+
 All parameters are read from `config.json` — nothing is hardcoded.
 Each experiment saves results to `results/<experiment_id>/<timestamp>/`.
 
 | # | ID | Paper Reference | Est. time |
 |---|-----|-----------------|-----------|
-| 1 | `figure5` | Figure 5: saVSS vs cgVSS | ~2 h |
+| 1 | `figure5` | Figure 5: saVSS vs cgVSS | ~3 h 45 min |
 | 2 | `table9` | Table 9: Server per-epoch costs | ~30 min |
 | 3 | `table6` | Table 6: Client secret-recovery costs | ~15 min* |
 | 4 | `table7` | Table 7: Committee-member costs | < 1 min* |

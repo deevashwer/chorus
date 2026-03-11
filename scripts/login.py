@@ -11,10 +11,10 @@ Usage:
     python3 scripts/login.py
 """
 
+import hashlib
 import json
 import os
 import platform
-import subprocess
 import sys
 from pathlib import Path
 
@@ -103,7 +103,8 @@ def confirm_config(cfg):
 
 def connect(cfg):
     hostname = platform.node() or "evaluator"
-    session = f"chorus-{hostname}"
+    tag = hashlib.sha256(hostname.encode()).hexdigest()[:12]
+    session = f"chorus-{tag}"
 
     print("-" * 62)
     print()
