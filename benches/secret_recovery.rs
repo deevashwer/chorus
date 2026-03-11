@@ -168,7 +168,9 @@ fn truncate_committee(committee: &CommitteeData, truncated_size: usize) -> Commi
 }
 
 fn custom_config() -> Criterion {
-    Criterion::default().sample_size(10) // Reduces the number of samples
+    let config = load_config();
+    let sample_size = config["sample_size"].as_u64().unwrap() as usize;
+    Criterion::default().sample_size(sample_size)
 }
 
 fn bench_client_new(c: &mut Criterion, params: &SystemParams) {

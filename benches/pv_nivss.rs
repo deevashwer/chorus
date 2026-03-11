@@ -21,7 +21,9 @@ type G1 = <E as Pairing>::G1Affine;
 use rayon::prelude::*;
 
 fn custom_config() -> Criterion {
-    Criterion::default().sample_size(10) // Reduces the number of samples
+    let config = load_config();
+    let sample_size = config["sample_size"].as_u64().unwrap() as usize;
+    Criterion::default().sample_size(sample_size)
 }
 
 /// Reads config.json from the repo root and returns it as a serde_json::Value.
