@@ -513,6 +513,13 @@ def start_server_on_compute(project, zone):
             "cd ~/chorus && RUSTFLAGS='-A warnings' "
             "cargo build --release --bin server")
 
+    # Kill any leftover server from a previous interrupted run
+    ssh_cmd(project, zone,
+            f"kill $(cat /tmp/chorus_server.pid 2>/dev/null) 2>/dev/null; "
+            f"fuser -k {port}/tcp 2>/dev/null; "
+            f"rm -f /tmp/chorus_server.pid /tmp/chorus_server.log; "
+            f"sleep 1; true")
+
     ssh_cmd(project, zone,
             f"cd ~/chorus && "
             f"BENCH_CASES={bench_cases} NUM_CLIENTS={num_clients} "
@@ -550,7 +557,9 @@ def start_server_on_compute(project, zone):
 def stop_server_on_compute(project, zone):
     """Kill the Chorus network server on the compute VM (best-effort)."""
     try:
+        port = CONFIG["network"]["server_port"]
         stop_cmd = ("kill $(cat /tmp/chorus_server.pid) 2>/dev/null; "
+                    f"fuser -k {port}/tcp 2>/dev/null; "
                     "rm -f /tmp/chorus_server.pid /tmp/chorus_server.log || true")
         subprocess.run(
             ["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
