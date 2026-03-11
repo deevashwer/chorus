@@ -860,41 +860,41 @@ EXPERIMENTS = [
         "expected_minutes": CONFIG["experiments"]["figure5"]["expected_minutes"],
         "run": run_figure5,
     },
-    # -- Secret-recovery outputs (each gets its own results/<id>/ directory) --
+    # -- Secret-recovery outputs -----------------------------------------------
     {
         "id": "table9",
         "description": "Table 9: Server per-epoch costs (server benchmark only)",
-        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"],
+        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"]["table9"],
         "run": make_sr_runner("table9"),
     },
     {
         "id": "table6",
         "description": "Table 6: Secret-recovery client costs",
-        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"],
+        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"]["table6"],
         "run": make_sr_runner("table6"),
     },
     {
         "id": "table7",
         "description": "Table 7: Client committee costs and sortition frequency",
-        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"],
+        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"]["table7"],
         "run": make_sr_runner("table7"),
     },
     {
         "id": "figure8",
         "description": "Figure 8: Client cost breakdown (time + communication)",
-        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"],
+        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"]["figure8"],
         "run": make_sr_runner("figure8"),
     },
     {
         "id": "appendixA41",
         "description": "Appendix A.4.1: One-time DKG setup costs",
-        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"],
+        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"]["appendixA41"],
         "run": make_sr_runner("appendixA41"),
     },
     {
         "id": "server_cost",
         "description": "Server dollar-cost estimation (server benchmark only)",
-        "expected_minutes": CONFIG["experiments"]["server_cost"]["expected_minutes"],
+        "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"]["server_cost"],
         "run": make_sr_runner("server_cost"),
     },
     # -- Pure computation (no benchmarks) ------------------------------------
