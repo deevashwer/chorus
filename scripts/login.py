@@ -73,24 +73,22 @@ def gather_config():
     print("-" * 62)
     print()
     print("  The authors should have given you:")
-    print("    1. An SSH private key file")
-    print("    2. The matching public key file")
-    print("    3. The control VM's IP address")
+    print("    1. An SSH key pair (private key + .pub file)")
+    print("    2. The control VM's IP address")
     print()
 
     host = ask("Control VM IP address")
-    user = ask("SSH user", default="ubuntu")
     print()
 
-    print("  Now provide the SSH key pair you received from the authors.")
-    print()
-    priv = ask("Path to SSH private key (e.g. ~/chorus_eval_key)")
-    priv = resolve_key(priv)
+    key = ask("Path to SSH private key (e.g. ~/chorus_eval_key)")
+    key = resolve_key(key)
 
-    pub = ask("Path to SSH public key  (e.g. ~/chorus_eval_key.pub)")
-    pub = resolve_key(pub)
+    pub = key + ".pub"
+    if not Path(pub).exists():
+        print(f"\n  Warning: expected public key at {pub} but not found.")
+        print("  (SSH only needs the private key, continuing anyway.)")
 
-    return {"host": host, "user": user, "private_key": priv, "public_key": pub}
+    return {"host": host, "key": key}
 
 
 def confirm_config(cfg):
@@ -98,10 +96,8 @@ def confirm_config(cfg):
     print("-" * 62)
     print()
     print("  Connection details:")
-    print(f"    Host:        {cfg['host']}")
-    print(f"    User:        {cfg['user']}")
-    print(f"    Private key: {cfg['private_key']}")
-    print(f"    Public key:  {cfg['public_key']}")
+    print(f"    Host: {cfg['host']}")
+    print(f"    Key:  {cfg['key']}")
     print()
 
 
@@ -111,7 +107,7 @@ def connect(cfg):
 
     print("-" * 62)
     print()
-    print(f"  Connecting to {cfg['user']}@{cfg['host']}...")
+    print(f"  Connecting to gcpuser@{cfg['host']}...")
     print(f"  Screen session: {session}")
     print()
     print("  Once inside, run these on the control VM:")
@@ -123,16 +119,17 @@ def connect(cfg):
     print("  To scroll up in screen:              Ctrl-A, then Esc")
     print()
     print("=" * 62)
+    input("\n  Press Enter to connect...")
     print()
 
     os.execvp("ssh", [
         "ssh",
         "-t",
-        "-i", cfg["private_key"],
+        "-i", cfg["key"],
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "LogLevel=ERROR",
-        f"{cfg['user']}@{cfg['host']}",
+        f"gcpuser@{cfg['host']}",
         f"screen -dRR {session}",
     ])
 
@@ -148,13 +145,10 @@ def main():
         answer = input("  Use these settings? [Y/n]: ").strip().lower()
         if answer in ("", "y", "yes"):
             cfg = saved
-            # Re-verify keys still exist
-            for key in ("private_key", "public_key"):
-                if not Path(cfg[key]).exists():
-                    print(f"\n  Warning: {key} no longer exists at {cfg[key]}")
-                    print("  Let's re-enter the connection details.\n")
-                    cfg = gather_config()
-                    break
+            if not Path(cfg["key"]).exists():
+                print(f"\n  Warning: key no longer exists at {cfg['key']}")
+                print("  Let's re-enter the connection details.\n")
+                cfg = gather_config()
         else:
             cfg = gather_config()
     else:
