@@ -250,14 +250,14 @@ impl ECPSSClient {
             match ClientListMerkleTreeAVD::verify_lookup(&(), &key, &Some((0, value)), &root_bytes, proof) {
                 Ok(_) => (),
                 Err(e) => {
-                    return Err(InvalidCommittee::MerkleProof(Some(e)))?;
+                    return Err(InvalidCommittee::MerkleProof(Some(e)));
                 }
             }
             Ok(())
         }).collect::<Result<_, InvalidCommittee>>()?;
         // verify committee size >= threshold
         if committee.members.len() < params.threshold {
-            return Err(InvalidCommittee::SmallerThanThreshold)?;
+            return Err(InvalidCommittee::SmallerThanThreshold);
         }
 
         // committee should have distinct client ids, distinct public keys, distinct verification keys, and distinct VRF public keys
@@ -273,7 +273,7 @@ impl ECPSSClient {
             committee.members.iter().map(|(c, _)| c.vrf_pubkey.clone()).collect();
         let vrf_pubkeys_distinct = check_all_entries_are_distinct(&vrf_pubkeys);
         if !ids_distinct || !pke_pubkeys_distinct || !sig_pubkeys_distinct || !vrf_pubkeys_distinct {
-            return Err(InvalidCommittee::DuplicateEntries)?;
+            return Err(InvalidCommittee::DuplicateEntries);
         }
 
         // check sortition proofs
@@ -289,7 +289,7 @@ impl ECPSSClient {
             match srt_state.verify(&seed, &client.vrf_pubkey, &vrf_proof, params.num_clients, params.committee_size) {
                 Ok(_) => (),
                 Err(err) => {
-                    return Err(InvalidCommittee::SortitionProof(err))?;
+                    return Err(InvalidCommittee::SortitionProof(err));
                 }
             }
 
@@ -302,7 +302,7 @@ impl ECPSSClient {
                 match cl_koe.verify(&instance, &client.pubkey_proof) {
                     Ok(_) => (),
                     Err(err) => {
-                        return Err(InvalidCommittee::Proofs(err))?;
+                        return Err(InvalidCommittee::Proofs(err));
                     }
                 }
             }

@@ -60,19 +60,56 @@ impl BenchmarkType {
     }
 }
 
-const BENCH_CASES: [(usize, (usize, usize), usize, usize); 2] = [
+const ALL_BENCH_CASES: [(usize, (usize, usize), usize, usize); 2] = [
     (1, (10, 50), 300, 1090),
     (2, (1, 75), 121, 1214),
 ];
 
-const NUM_CLIENTS: [usize; 3] = [
+const ALL_NUM_CLIENTS: [usize; 3] = [
     10usize.pow(6),
     10usize.pow(7),
     10usize.pow(8),
 ];
 
-const NETWORK_IP_FOR_CLIENTS: &str = "0.0.0.0";
-const NETWORK_IP_FOR_SERVER: &str = "0.0.0.0";
+fn selected_cases() -> Vec<(usize, (usize, usize), usize, usize)> {
+    if let Ok(val) = env::var("BENCH_CASES") {
+        let indices: Vec<usize> = val.split(',')
+            .map(|s| s.trim().parse::<usize>().expect("BENCH_CASES must be comma-separated case numbers (1 or 2)"))
+            .collect();
+        ALL_BENCH_CASES.iter()
+            .filter(|(id, ..)| indices.contains(id))
+            .cloned()
+            .collect()
+    } else {
+        ALL_BENCH_CASES.to_vec()
+    }
+}
+
+fn selected_num_clients() -> Vec<usize> {
+    if let Ok(val) = env::var("NUM_CLIENTS") {
+        val.split(',')
+            .map(|s| {
+                let s = s.trim().to_uppercase();
+                match s.as_str() {
+                    "1M" => 10usize.pow(6),
+                    "10M" => 10usize.pow(7),
+                    "100M" => 10usize.pow(8),
+                    other => other.parse::<usize>().expect("NUM_CLIENTS entries must be 1M, 10M, 100M, or a raw number"),
+                }
+            })
+            .collect()
+    } else {
+        ALL_NUM_CLIENTS.to_vec()
+    }
+}
+
+fn network_ip_for_clients() -> String {
+    env::var("SERVER_IP").unwrap_or_else(|_| "0.0.0.0".to_string())
+}
+
+fn network_ip_for_server() -> String {
+    env::var("SERVER_BIND_IP").unwrap_or_else(|_| "0.0.0.0".to_string())
+}
 
 fn unique_elements<T: std::hash::Hash + Eq + Clone>(vec: Vec<T>) -> Vec<T> {
     let set: HashSet<_> = vec.into_iter().collect();
@@ -152,7 +189,7 @@ fn bench_dkg_contribute_with_network(c: &mut Criterion,
                 };
                 #[cfg(feature = "print-trace")]
                 let download_time = start_timer!(|| "download for dkg-contribute");
-                let (download, mut stream) = download_from_network::<ClientDownloadContribute>(&NETWORK_IP_FOR_CLIENTS, &request).await.unwrap();
+                let (download, mut stream) = download_from_network::<ClientDownloadContribute>(&network_ip_for_clients(), &request).await.unwrap();
                 #[cfg(feature = "print-trace")]
                 end_timer!(download_time);
                 let seat = ecpss_client.on_committee(&download.committee_0, params, epoch-1).unwrap().unwrap();
@@ -213,7 +250,7 @@ fn bench_handover_dkg_with_network(c: &mut Criterion,
                 };
                 #[cfg(feature = "print-trace")]
                 let download_time = start_timer!(|| "download for handover-dkg");
-                let (download, mut stream) = download_from_network::<ClientDownloadDKG>(&NETWORK_IP_FOR_CLIENTS, &request).await.unwrap();
+                let (download, mut stream) = download_from_network::<ClientDownloadDKG>(&network_ip_for_clients(), &request).await.unwrap();
                 #[cfg(feature = "print-trace")]
                 end_timer!(download_time);
                 let seat = ecpss_client.on_committee(&download.committee_1, params, epoch-1).unwrap().unwrap();
@@ -274,7 +311,7 @@ fn bench_handover_typical_with_network(c: &mut Criterion,
                 };
                 #[cfg(feature = "print-trace")]
                 let download_time = start_timer!(|| "download for handover-typical");
-                let (download, mut stream) = download_from_network::<ClientDownloadHandover>(&NETWORK_IP_FOR_CLIENTS, &request).await.unwrap();
+                let (download, mut stream) = download_from_network::<ClientDownloadHandover>(&network_ip_for_clients(), &request).await.unwrap();
                 #[cfg(feature = "print-trace")]
                 end_timer!(download_time);
                 let seat = ecpss_client.on_committee(&download.committee_2, params, epoch-1).unwrap().unwrap();
@@ -415,7 +452,8 @@ fn benches_class(c: &mut Criterion) {
         },
     };
 
-    for num_clients in NUM_CLIENTS.iter() {
+    let selected_clients = selected_num_clients();
+    for num_clients in selected_clients.iter() {
         let num_clients = *num_clients;
         let params = SystemParams {
             num_clients,
@@ -466,7 +504,8 @@ fn benches_class(c: &mut Criterion) {
                 None
             }
         };
-    for (case, (corr, fail), t, n) in BENCH_CASES.iter() {
+    let selected = selected_cases();
+    for (case, (corr, fail), t, n) in selected.iter() {
         let (case, corr, fail, t, n) = (*case, *corr, *fail, *t, *n);
         let threshold = t as usize;
         let committee_size = n as usize;

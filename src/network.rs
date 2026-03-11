@@ -6,12 +6,10 @@ use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::collections::HashMap;
 use std::net::TcpStream as StdTcpStream;
-use std::fmt::format;
 use std::io::Read;
 use crate::read_from_file;
-use crate::secret_recovery::client;
 use crate::secret_recovery::common::{CoefficientCommitments, CommitteeData, CommitteeStateClient, Handover, HandoverLite, PublicState, RecoveryRequestBatch, RecoveryResponseBatch};
-use ark_std::{cfg_into_iter, end_timer, start_timer};
+use ark_std::cfg_into_iter;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -210,12 +208,44 @@ pub enum API {
     TypicalHandover,
 }
 
-const CASES: [usize; 2] = [1, 2];
-const NUM_CLIENTS: [usize; 3] = [
+const ALL_CASES: [usize; 2] = [1, 2];
+const ALL_NUM_CLIENTS: [usize; 3] = [
     10usize.pow(6),
     10usize.pow(7),
-    10usize.pow(8)
+    10usize.pow(8),
 ];
+
+fn selected_cases() -> Vec<usize> {
+    if let Ok(val) = std::env::var("BENCH_CASES") {
+        val.split(',')
+            .map(|s| s.trim().parse::<usize>().expect("BENCH_CASES must be comma-separated case numbers"))
+            .collect()
+    } else {
+        ALL_CASES.to_vec()
+    }
+}
+
+fn selected_num_clients() -> Vec<usize> {
+    if let Ok(val) = std::env::var("NUM_CLIENTS") {
+        val.split(',')
+            .map(|s| {
+                let s = s.trim().to_uppercase();
+                match s.as_str() {
+                    "1M" => 10usize.pow(6),
+                    "10M" => 10usize.pow(7),
+                    "100M" => 10usize.pow(8),
+                    other => other.parse::<usize>().expect("NUM_CLIENTS entries must be 1M, 10M, 100M, or a raw number"),
+                }
+            })
+            .collect()
+    } else {
+        ALL_NUM_CLIENTS.to_vec()
+    }
+}
+
+pub fn server_port() -> String {
+    std::env::var("SERVER_PORT").unwrap_or_else(|_| PORT.to_string())
+}
 
 pub type NetworkResponses = HashMap<NetworkRequest, Vec<u8>>;
 
@@ -294,9 +324,11 @@ impl NetworkRequest {
 
 pub async fn populate_network_responses() -> NetworkResponses {
     let mut responses = HashMap::new();
-    for case in CASES.iter() {
+    let cases = selected_cases();
+    let clients = selected_num_clients();
+    for case in cases.iter() {
         for api in [API::DKGContribute, API::DKGHandover, API::TypicalHandover].iter() {
-            for num_clients in NUM_CLIENTS.iter() {
+            for num_clients in clients.iter() {
                 let request = NetworkRequest {
                     case: *case,
                     num_clients: *num_clients,
@@ -311,7 +343,8 @@ pub async fn populate_network_responses() -> NetworkResponses {
 }
 
 pub async fn network_service() -> Result<(), Box<dyn std::error::Error>> {
-    let ip = format!("0.0.0.0:{}", PORT);
+    let port = server_port();
+    let ip = format!("0.0.0.0:{}", port);
     let addr = ip.parse().unwrap();
 
     let network_responses = populate_network_responses().await;
@@ -388,7 +421,8 @@ pub async fn network_service() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub async fn download_from_network<T: DeserializeOwned>(ip: &str, request: &NetworkRequest) -> Result<(T, TcpStream), Box<dyn std::error::Error>> {
-    let ip = format!("{}:{}", ip, PORT);
+    let port = server_port();
+    let ip = format!("{}:{}", ip, port);
 
     let addr = ip.parse().unwrap();
     let socket = TcpSocket::new_v4()?;
