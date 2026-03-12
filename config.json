@@ -35,7 +35,7 @@
   "experiments": {
     "figure5": {
       "description": "Figure 5: saVSS vs cgVSS runtime and communication",
-      "expected_minutes": 360,
+      "expected_minutes": 225,
       "server_vm": "compute",
       "client_vm": "control",
       "steps": [
@@ -75,8 +75,8 @@
         { "vm": "control", "bench": "secret_recovery", "mode": "client", "log": "secret_recovery_client.log" }
       ],
       "expected_minutes": {
-        "table9": 240,
-        "table6": 10,
+        "table9": 215,
+        "table6": 55,
         "table7": 1,
         "figure8": 1,
         "appendixA41": 1,
