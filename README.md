@@ -42,7 +42,7 @@ IP address.  Your local machine needs Python 3 and an SSH client.
 |------|---------|-----------|
 | Log in to the control VM | `python3 scripts/login.py` | ~30 s |
 | Set up the compute VM (idempotent) | `python3 ~/chorus/scripts/setup_eval.py` | ~3 h 10 min* |
-| Run all experiments | `python3 ~/chorus/scripts/run_experiment.py all` | ~8 h |
+| Run all experiments | `python3 ~/chorus/scripts/run_experiment.py all` | ~7 h |
 | Tear down compute VM | `python3 ~/chorus/scripts/teardown.py` | ~1 min |
 
 \* Most of the setup time (~3 h 5 min) is spent preprocessing
@@ -84,9 +84,9 @@ Each experiment saves results to `results/<experiment_id>/<timestamp>/`.
 
 | # | ID | Paper Reference | Est. time |
 |---|-----|-----------------|-----------|
-| 1 | `figure5` | Figure 5: saVSS vs cgVSS | ~3 h 45 min |
-| 2 | `table9` | Table 9: Server per-epoch costs | ~3 h 30 min |
-| 3 | `table6` | Table 6: Client secret-recovery costs | ~55 min* |
+| 1 | `figure5` | Figure 5: saVSS vs cgVSS | ~2 h 28 mins |
+| 2 | `table9` | Table 9: Server per-epoch costs | ~3 h 30 mins |
+| 3 | `table6` | Table 6: Client secret-recovery costs | ~55 mins* |
 | 4 | `table7` | Table 7: Committee-member costs | < 1 min* |
 | 5 | `figure8` | Figure 8: Client cost breakdown | < 1 min* |
 | 6 | `appendixA41` | Appendix A.4.1: DKG setup costs | < 1 min* |
