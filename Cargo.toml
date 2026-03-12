@@ -57,6 +57,7 @@ print-trace  = ["ark-std/print-trace"]
 parallel = ["rayon", "ark-std/parallel"]
 deterministic = []
 client-parallel = ["class-group/client-parallel"]
+client-parallel-bench = ["class-group/client-parallel-bench"]
 
 [profile.test]
 opt-level = 3
