@@ -67,16 +67,14 @@ fn main() {
 
 // find path to gmp-mpfr-sys's installation of gmp
 fn set_gmp_path() -> String {
-    let target = env::var("TARGET").expect("TARGET not found");
-    let profile = std::env::var("PROFILE").expect("PROFILE not found"); // "release" for release builds, "debug" for other builds
-    let pwd = env::current_dir().unwrap().display().to_string();
-    let target_dir: String;
-    if target.contains("android") {
-        target_dir = format!("target/{}/{}", target, profile);
-    } else {
-        target_dir = format!("target/{}", profile);
-    }
-    let build_dir = format!("{}/{}", pwd, target_dir);
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
+    let build_dir = PathBuf::from(&out_dir)
+        .ancestors()
+        .find(|p| p.ends_with("build"))
+        .map(|p| p.parent().unwrap().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(&out_dir))
+        .display()
+        .to_string();
     println!("build dir: {}", build_dir);
     let gmp_search_output = Command::new("find")
     .arg(build_dir)
