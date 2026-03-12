@@ -659,6 +659,7 @@ def run_figure5(project: str, zone: str, exp_dir: Path,
                         ["bash", "-c",
                          f"cd {REPO_DIR} && {bench_cmd} 2>&1"
                          f" | tee {log_path}"],
+                        env_extra={"CARGO_FEATURES": "client-parallel-bench"},
                     )
 
     # Plot (always runs — cheap)
@@ -748,7 +749,7 @@ def _run_sr_client_benchmark(project: str, zone: str, exp_dir: Path):
                 env_extra={
                     "WITH_NETWORK": "1",
                     "SERVER_IP": compute_ip,
-                    "CARGO_FEATURES": "print-trace",
+                    "CARGO_FEATURES": "print-trace,client-parallel-bench",
                 },
             )
 

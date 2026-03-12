@@ -10,19 +10,19 @@ use rayon::prelude::*;
 #[macro_export]
 macro_rules! cfg_into_iter_client {
     ($e: expr, $min_len: expr) => {{
-        #[cfg(all(feature = "client-parallel", target_os = "android"))]
+        #[cfg(any(all(feature = "client-parallel", target_os = "android"), feature = "client-parallel-bench"))]
         let result = $e.into_par_iter().with_min_len($min_len);
 
-        #[cfg(any(not(feature = "client-parallel"), not(target_os = "android")))]
+        #[cfg(not(any(all(feature = "client-parallel", target_os = "android"), feature = "client-parallel-bench")))]
         let result = $e.into_iter();
 
         result
     }};
     ($e: expr) => {{
-        #[cfg(all(feature = "client-parallel", target_os = "android"))]
+        #[cfg(any(all(feature = "client-parallel", target_os = "android"), feature = "client-parallel-bench"))]
         let result = $e.into_par_iter();
 
-        #[cfg(any(not(feature = "client-parallel"), not(target_os = "android")))]
+        #[cfg(not(any(all(feature = "client-parallel", target_os = "android"), feature = "client-parallel-bench")))]
         let result = $e.into_iter();
 
         result
