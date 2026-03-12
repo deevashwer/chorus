@@ -174,6 +174,7 @@ fn benches_class(c: &mut Criterion) {
             chorus::end_stat_tracking!(start);
         }
     }
+    println!("CHORUS_BENCHMARK_OK");
 }
 
 criterion_group! {

@@ -989,6 +989,7 @@ fn benches_class(c: &mut Criterion) {
         }
     }
     }
+    println!("CHORUS_BENCHMARK_OK");
 }
 
 #[cfg(feature = "deterministic")]
