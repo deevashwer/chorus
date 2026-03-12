@@ -36,6 +36,7 @@ regex = "1"
 indicatif = "0.16"
 serde = { version = "1.0", features = ["derive"] }
 bincode = "1.3"
+serde_json = "1.0"
 
 # serialize
 serde_derive = "1.0.130"
@@ -43,6 +44,7 @@ bytes = { version = "^1.1.0", features = ["serde"] }
 
 [dev-dependencies]
 criterion = ">=0.2"
+serde_json = "1.0"
 
 [patch.crates-io]
 gmp-mpfr-sys = { path = "./gmp-mpfr-sys/" } # a patch that allows for cross-compilation to Android
@@ -55,6 +57,7 @@ print-trace  = ["ark-std/print-trace"]
 parallel = ["rayon", "ark-std/parallel"]
 deterministic = []
 client-parallel = ["class-group/client-parallel"]
+client-parallel-bench = ["class-group/client-parallel-bench"]
 
 [profile.test]
 opt-level = 3

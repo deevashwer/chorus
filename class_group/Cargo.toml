@@ -22,6 +22,7 @@ gmp-mpfr-sys = { path = "../gmp-mpfr-sys/" }
 [features]
 default = []
 client-parallel = ["rayon"]
+client-parallel-bench = ["rayon"]
 
 [dev-dependencies]
 criterion = ">=0.2"

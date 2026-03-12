@@ -1,124 +1,97 @@
 # Chorus: Secret Recovery with Ephemeral Client Committees
 
-## 📄 Artifact Material
+**IEEE S&P 2026 Artifact**
 
-For the full constructions, formal definitions, and security proofs deferred from the main paper, please refer to the artifact material:
+Rust implementation and reproducibility package for the Chorus paper,
+targeting the IEEE S&P **Available**, **Functional**, and **Reproduced**
+badges.
 
-**[chorus-artifact-material.pdf](./chorus-artifact-material.pdf)**
+### Hardware
+
+The artifact uses two GCP VMs in the same zone:
+
+- **Compute VM (server):** `c2d-standard-112` — 112 vCPUs (AMD EPYC Milan), 448 GB RAM, 200 GB disk.
+- **Control VM (client):** `e2-standard-8` — 8 vCPUs, 8 GB RAM.
+
+Both run Ubuntu 22.04.  The compute VM is created and destroyed by the
+setup/teardown scripts; the control VM is pre-provisioned by the authors.
+
+### Important: Differences from the Paper
+
+The paper's client experiments ran on an **Android phone** (Snapdragon 8 Gen 3, 8 cores, 8 GB RAM).  This artifact uses a **cloud VM** as
+the client instead (8 vCPUs, 8 GB RAM) to make evaluation portable.
+As a result:
+
+- **Battery measurements cannot be reproduced** and are noted as skipped
+  in generated tables.
+- **Network conditions are emulated.** The paper's experiments used a
+  commodity WiFi connection from the phone to a server in South Asia.
+  Reproducing that during artifact evaluation is unclear, so we
+  use Linux `tc` (netem + tbf) to emulate the same measured conditions
+  (75 Mbps bandwidth, 280 ms RTT) between two co-located VMs.
+- **Absolute timings may differ slightly** from the paper.  Relative
+  comparisons and communication costs are unaffected.
+---
+
+## Quick Start
+
+You will receive from the authors: an SSH key pair and the control VM's
+IP address.  Your local machine needs Python 3 and an SSH client.
+
+| Step | Command | Est. time |
+|------|---------|-----------|
+| Log in to the control VM | `python3 scripts/login.py` | ~30 s |
+| Set up the compute VM (idempotent) | `python3 ~/chorus/scripts/setup_eval.py` | ~3 h 10 min* |
+| Run all experiments | `python3 ~/chorus/scripts/run_experiment.py all` | ~7 h |
+| Tear down compute VM | `python3 ~/chorus/scripts/teardown.py` | ~1 min |
+
+\* Most of the setup time (~3 h 5 min) is spent preprocessing
+state; VM setup and building the artifact takes only ~5 min.
+
+You can also run `run_experiment.py` without arguments for an
+interactive menu, or pass a single experiment ID (e.g. `table6`).
+
+Benchmark logs are cached in `results/` and reused across runs since
+they take a long time to produce.  To force a full re-run from scratch:
+
+```bash
+python3 ~/chorus/scripts/run_experiment.py all --force
+```
+
+All commands run inside a **GNU screen** session.  If you disconnect,
+experiments keep running.  Re-run `login.py` to reconnect.
+
+### Viewing Results
+
+Results are saved on the control VM under `~/chorus/results/`.  To
+download them to your local machine (run from your local checkout):
+
+```bash
+python3 scripts/fetch_results.py            # fetch all experiments
+python3 scripts/fetch_results.py table6 figure8   # fetch specific ones
+```
+
+This uses the same SSH credentials saved by `login.py`.  Downloaded
+files go into the local `results/` directory — `.tex` tables and `.png`
+figures can be opened directly.
 
 ---
 
-## 💻 Implementation & Benchmarking
+## Experiments
 
-The sections below provide instructions for building, running, and benchmarking the Chorus implementation.
+All parameters are read from `config.json` — nothing is hardcoded.
+Each experiment saves results to `results/<experiment_id>/<timestamp>/`.
 
-## 📦 Installation
+| # | ID | Paper Reference | Est. time |
+|---|-----|-----------------|-----------|
+| 1 | `figure5` | Figure 5: saVSS vs cgVSS | ~2 h 28 mins |
+| 2 | `table9` | Table 9: Server per-epoch costs | ~3 h 30 mins |
+| 3 | `table6` | Table 6: Client secret-recovery costs | ~55 mins* |
+| 4 | `table7` | Table 7: Committee-member costs | < 1 min* |
+| 5 | `figure8` | Figure 8: Client cost breakdown | < 1 min* |
+| 6 | `appendixA41` | Appendix A.4.1: DKG setup costs | < 1 min* |
+| 7 | `server_cost` | Server dollar-cost estimation | < 1 min* |
+| 8 | `table10` | Table 10: Parameter selection | < 1 min |
 
-```bash
-  # Install cargo
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-  # Install dependencies
-  sudo apt-get install libgmp-dev libmpfr-dev libssl-dev m4
-  # First build class_group crate
-  cd class_group; cargo build --release
-  # Then build the chorus crate
-  cd chorus; cargo build --release
-```
-
-## 🚀 Benchmarking
-### ️☁️ Server
-To benchmark the server, run in the `chorus` directory:
-```bash
-# Run on server and log the output
-BENCHMARK_TYPE=SERVER cargo bench --bench secret_recovery 2>&1 | tee secret_recovery_server.log
-```
-
-### 💻‍ Client
-
-First run the following command in `chorus` directory on a server to store the server state to independently benchmark the end-to-end latency of a client:
-```bash
-# Run on server
-BENCHMARK_TYPE=SAVE_STATE cargo bench --bench secret_recovery
-```
-This will create directories `./case_{case_number}_clients_{num_clients}` where `case_number = {1, 2}` and `num_clients = {1M, 10M, 100M}`. The case descriptions are as follows:
-- `case_1`: committee size: 1090, threshold: 300, corruption fraction: 0.1, fail fraction: 0.5
-- `case_2`: committee size: 1214, threshold: 121, corruption fraction: 0.01, fail fraction: 0.75
-
-Then, run the the following on the server in the `chorus` directory to start a server listening on port 32000  after making sure that connections are accepted on this port and the `src/network.rs` file only includes the `CASES` and `NUM_CLIENTS` for which the state was saved:
-```bash
-# Run on server
-./target/release/server
-```
-Transfer the `case_{case_number}_clients_{num_clients}` directories to the client and update `NETWORK_IP_FOR_CLIENTS` in `benches/secret_recovery.rs` on the client to `{SERVER_IP_ADDRESS}`.
-
-Then run the following in the `chorus` directory:
-```bash
-# Run on client and log the output
-BENCHMARK_TYPE=CLIENT cargo bench --bench secret_recovery 2>&1 | tee secret_recovery_client.log
-```
-
-> Note: the client benchmark can also run without network. For that, replace client benchmark that end in `with_network` with their local counterparts.
-
-### 📱 Client (Android)
-[Download](https://developer.android.com/ndk/downloads) the suitable NDK package for your host machine to the `chorus` directory, and unpack the downloaded archive into the same directory.
-
-The following will assume that the target Android device runs Android 14 and has a 64-bit ARM CPU (instruction set=`aarch64`). As such, it requires `api_level=34` and `arm64-v8a` ABI. If you want to build for a different target, please adjust the following instructions accordingly.
-
-> In case you update android API level, make sure to update the following files: `chorus/.cargo/config.toml`, `chorus/class_group/.cargo/config.toml`, `chorus/gmp-mpfr-sys/build.rs`, and `chorus/class_group/build.rs`.
-
-Setup the following environment variables:
-```bash
-# See https://developer.android.com/ndk/guides/abis for more options
-export ANDROID_ABI=arm64-v8a
-
-# Linux
-export ANDROID_NDK_HOME={chorus_dir}/android-ndk-*/
-export ANDROID_TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
-
-# MacOS
-export ANDROID_NDK_HOME={chorus_dir}/AndroidNDK*.app/Contents/NDK/
-export ANDROID_TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin
-
-# Add the Android toolchain to the PATH
-export PATH="$ANDROID_TOOLCHAIN:$PATH"
-```
-
-Install Android toolchain using rustup: `rustup target add aarch64-linux-android`, and then build using this toolchain:
-```bash
-# First build class_group crate
-cd class_group; cargo build --target aarch64-linux-android --release
-# Then build the chorus crate
-cd chorus; cargo build --target aarch64-linux-android --release
-```
-Build `secret_recovery` client benchmark:
-```bash
-cargo bench --target aarch64-linux-android --bench secret_recovery --no-run
-```
-The above command will generate a binary in `target/aarch64-linux-android/release/deps/`, say `secret_recovery-abcd`. Now, you can transfer this binary to your Android device using `adb` (Android Debug Bridge). To install `adb`, do the following:
-```bash
-# Linux
-sudo apt install adb
-
-# MacOS
-brew install android-platform-tools
-```
-With `adb` installed, you can transfer the binary to your Android device as follows:
-```bash
-# Connect your Android device to your computer via USB and enable USB debugging in the developer options.
-adb attach
-adb push target/aarch64-linux-android/release/deps/secret-recovery-abcd /data/local/tmp
-adb push case_*_clients_* /data/local/tmp
-adb shell
-```
-This will give you a shell on the Android device. You can now run the binary:
-```bash
-# Run on the Android phone and log the output
-cd /data/local/tmp
-BENCHMARK_TYPE=CLIENT ./secret_recovery-abcd --bench 2>&1 | tee secret_recovery_client.log
-```
-
-## 🔍 Log Parsing
-To parse the secret_recovery benchmark, copy `secret_recovery_server.log` and `secret_recovery_client.log` from the server and client, respectively, and run:
-```bash
-python parse_secret_recovery_bench.py
-```
+\* Experiments 2–7 share benchmark logs.  Once `table9` and `table6`
+have run, experiments 4–7 reuse those logs and finish instantly.

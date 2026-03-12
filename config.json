@@ -1,0 +1,87 @@
+{
+  "sample_size": 10,
+  "compute_vm": {
+    "name": "chorus-compute",
+    "machine_type": "c2d-standard-112",
+    "boot_disk_size": "200GB",
+    "image_family": "ubuntu-2204-lts",
+    "image_project": "ubuntu-os-cloud"
+  },
+  "bench_cases": [
+    {
+      "case": 1,
+      "corrupt_fraction": 10,
+      "fail_fraction": 50,
+      "threshold": 300,
+      "committee_size": 1090
+    }
+  ],
+  "nivss_cases": [
+    { "case": 1, "fraction": 1,  "threshold": 105,  "committee_size": 561 },
+    { "case": 2, "fraction": 10, "threshold": 300,  "committee_size": 1090 },
+    { "case": 3, "fraction": 19, "threshold": 719,  "committee_size": 2123 },
+    { "case": 4, "fraction": 27, "threshold": 1659, "committee_size": 4292 }
+  ],
+  "nivss_receive_parallel": 8,
+  "num_clients": ["1M", "10M", "100M"],
+  "network": {
+    "server_bind_ip": "0.0.0.0",
+    "server_port": 32000
+  },
+  "network_limit": {
+    "bandwidth_mbps": 75,
+    "rtt_ms": 280
+  },
+  "experiments": {
+    "figure5": {
+      "description": "Figure 5: saVSS vs cgVSS runtime and communication",
+      "expected_minutes": 150,
+      "server_vm": "compute",
+      "client_vm": "control",
+      "steps": [
+        { "vm": "compute", "bench": "sa_nivss", "mode": "server", "log": "sa_nivss_server.log" },
+        { "vm": "control", "bench": "sa_nivss", "mode": "client", "log": "sa_nivss_client_parallel.log" },
+        { "vm": "control", "bench": "pv_nivss", "mode": null,     "log": "pv_nivss_client_parallel.log" }
+      ],
+      "plots": ["nivss-time.png", "nivss-comm.png", "nivss-legend.png"]
+    },
+    "table10": {
+      "description": "Table 10: Parameter selection (n, threshold) vs. corruption/offline fractions",
+      "expected_minutes": 1,
+      "steps": [],
+      "plots": ["table10.tex"],
+      "corruption_fractions": [0.01, 0.05, 0.10, 0.15, 0.20],
+      "availability_fractions": [0.25, 0.50, 0.75],
+      "comp_sec": 128,
+      "stat_sec": 80,
+      "n_clients": 1000000
+    },
+    "server_cost": {
+      "description": "Server dollar-cost estimation breakdown",
+      "expected_minutes": 1,
+      "steps": [],
+      "plots": ["server_cost.tex"],
+      "recoveries_per_user_per_year": 1,
+      "compute_cost_per_month": 1930.52,
+      "epoch_interval_minutes": 2,
+      "network_cost_per_gb": 0.085,
+      "storage_per_client_bytes": 204,
+      "storage_cost_per_gb_month": 0.023
+    },
+    "secret_recovery": {
+      "description": "Tables 6, 7, 9, Figure 8, Appendix A.4.1: Secret recovery end-to-end",
+      "steps": [
+        { "vm": "compute", "bench": "secret_recovery", "mode": "server", "log": "secret_recovery_server.log" },
+        { "vm": "control", "bench": "secret_recovery", "mode": "client", "log": "secret_recovery_client.log" }
+      ],
+      "expected_minutes": {
+        "table9": 215,
+        "table6": 55,
+        "table7": 1,
+        "figure8": 1,
+        "appendixA41": 1,
+        "server_cost": 1
+      }
+    }
+  }
+}

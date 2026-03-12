@@ -6,17 +6,21 @@ use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::collections::HashMap;
 use std::net::TcpStream as StdTcpStream;
-use std::fmt::format;
 use std::io::Read;
 use crate::read_from_file;
-use crate::secret_recovery::client;
 use crate::secret_recovery::common::{CoefficientCommitments, CommitteeData, CommitteeStateClient, Handover, HandoverLite, PublicState, RecoveryRequestBatch, RecoveryResponseBatch};
 use ark_std::{cfg_into_iter, end_timer, start_timer};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-const PORT: &str = "32000";
+fn default_port() -> String {
+    let config = load_config();
+    config["network"]["server_port"]
+        .as_u64()
+        .expect("config.json must have network.server_port")
+        .to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientDownloadContribute {
@@ -210,12 +214,57 @@ pub enum API {
     TypicalHandover,
 }
 
-const CASES: [usize; 2] = [1, 2];
-const NUM_CLIENTS: [usize; 3] = [
-    10usize.pow(6),
-    10usize.pow(7),
-    10usize.pow(8)
-];
+fn load_config() -> serde_json::Value {
+    let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config.json");
+    let data = std::fs::read_to_string(&config_path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", config_path.display(), e));
+    serde_json::from_str(&data)
+        .unwrap_or_else(|e| panic!("Failed to parse {}: {}", config_path.display(), e))
+}
+
+fn parse_num_clients_str(s: &str) -> usize {
+    let s = s.trim().to_uppercase();
+    match s.as_str() {
+        "1M" => 10usize.pow(6),
+        "10M" => 10usize.pow(7),
+        "100M" => 10usize.pow(8),
+        other => other.parse::<usize>().expect("NUM_CLIENTS entries must be 1M, 10M, 100M, or a raw number"),
+    }
+}
+
+fn selected_cases() -> Vec<usize> {
+    if let Ok(val) = std::env::var("BENCH_CASES") {
+        val.split(',')
+            .map(|s| s.trim().parse::<usize>().expect("BENCH_CASES must be comma-separated case numbers"))
+            .collect()
+    } else {
+        let config = load_config();
+        config["bench_cases"].as_array()
+            .expect("config.json must have a bench_cases array")
+            .iter()
+            .map(|c: &serde_json::Value| c["case"].as_u64().expect("each bench_case must have a 'case' number") as usize)
+            .collect()
+    }
+}
+
+fn selected_num_clients() -> Vec<usize> {
+    if let Ok(val) = std::env::var("NUM_CLIENTS") {
+        val.split(',')
+            .map(|s| parse_num_clients_str(s))
+            .collect()
+    } else {
+        let config = load_config();
+        config["num_clients"].as_array()
+            .expect("config.json must have a num_clients array")
+            .iter()
+            .map(|v: &serde_json::Value| parse_num_clients_str(v.as_str().expect("num_clients entries must be strings")))
+            .collect()
+    }
+}
+
+pub fn server_port() -> String {
+    std::env::var("SERVER_PORT").unwrap_or_else(|_| default_port())
+}
 
 pub type NetworkResponses = HashMap<NetworkRequest, Vec<u8>>;
 
@@ -294,9 +343,11 @@ impl NetworkRequest {
 
 pub async fn populate_network_responses() -> NetworkResponses {
     let mut responses = HashMap::new();
-    for case in CASES.iter() {
+    let cases = selected_cases();
+    let clients = selected_num_clients();
+    for case in cases.iter() {
         for api in [API::DKGContribute, API::DKGHandover, API::TypicalHandover].iter() {
-            for num_clients in NUM_CLIENTS.iter() {
+            for num_clients in clients.iter() {
                 let request = NetworkRequest {
                     case: *case,
                     num_clients: *num_clients,
@@ -311,7 +362,15 @@ pub async fn populate_network_responses() -> NetworkResponses {
 }
 
 pub async fn network_service() -> Result<(), Box<dyn std::error::Error>> {
-    let ip = format!("0.0.0.0:{}", PORT);
+    let port = server_port();
+    let bind_ip = std::env::var("SERVER_BIND_IP").unwrap_or_else(|_| {
+        let config = load_config();
+        config["network"]["server_bind_ip"]
+            .as_str()
+            .expect("config.json must have network.server_bind_ip")
+            .to_string()
+    });
+    let ip = format!("{}:{}", bind_ip, port);
     let addr = ip.parse().unwrap();
 
     let network_responses = populate_network_responses().await;
@@ -388,7 +447,8 @@ pub async fn network_service() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub async fn download_from_network<T: DeserializeOwned>(ip: &str, request: &NetworkRequest) -> Result<(T, TcpStream), Box<dyn std::error::Error>> {
-    let ip = format!("{}:{}", ip, PORT);
+    let port = server_port();
+    let ip = format!("{}:{}", ip, port);
 
     let addr = ip.parse().unwrap();
     let socket = TcpSocket::new_v4()?;

@@ -1,0 +1,45 @@
+# Build outputs
+target/
+
+# macOS
+.DS_Store
+
+# Generated benchmark state directories
+case_*_clients_*
+
+# Serialized proving/verifying keys
+groth_pk
+groth_vk
+
+# Benchmark logs
+*.log
+
+# Archives and compressed artifacts
+*.tar.gz
+*.zip
+
+# GCP / cloud credentials and state
+*.json.key
+terraform.tfstate*
+.terraform/
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor and IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Android NDK (downloaded locally)
+android-ndk-*/
+AndroidNDK*.app/
+
+# Experiment results (generated logs, plots, timing data)
+results/
+
+# Eval (author-only SkyPilot config)
+eval/
