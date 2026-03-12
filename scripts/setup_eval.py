@@ -177,6 +177,20 @@ def copy_repo(project: str, zone: str):
             "mkdir -p ~/chorus && tar xzf /tmp/chorus-repo.tar.gz --strip-components=1 -C ~/chorus && rm /tmp/chorus-repo.tar.gz")
 
 
+SAVE_STATE_LOG = "/tmp/chorus_save_state.log"
+LOG_CANARY = "CHORUS_BENCHMARK_OK"
+
+
+def save_state_complete(project: str, zone: str) -> bool:
+    """Check whether a previous SAVE_STATE run completed on the compute VM."""
+    check = f"grep -q {LOG_CANARY} {SAVE_STATE_LOG} 2>/dev/null"
+    r = run(["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
+             "--project", project, "--zone", zone, "--",
+             f"bash -lc {shlex.quote(check)}"],
+            check=False, capture=True)
+    return r.returncode == 0
+
+
 def provision(project: str, zone: str):
     with timed("Copy repo to compute VM"):
         copy_repo(project, zone)
@@ -187,8 +201,13 @@ def provision(project: str, zone: str):
     with timed("Build (cargo build --release)"):
         ssh_cmd(project, zone, "cd ~/chorus && python3 scripts/run.py build")
 
-    with timed("Generate benchmark state"):
-        ssh_cmd(project, zone, "cd ~/chorus && python3 scripts/run.py generate")
+    if save_state_complete(project, zone):
+        print("\n    SAVE_STATE already completed (canary found) — skipping generation.")
+    else:
+        with timed("Generate benchmark state"):
+            ssh_cmd(project, zone,
+                    f"cd ~/chorus && python3 scripts/run.py generate "
+                    f"2>&1 | tee {SAVE_STATE_LOG}")
 
 
 def main():

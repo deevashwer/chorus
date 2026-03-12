@@ -124,6 +124,7 @@ fn benches_class(c: &mut Criterion) {
         bench_receive(c, &nivss, &sid, &dealing, threshold, &pke_pubkeys, &mut sig_key, 0, &pke_seckeys[0], receive_parallel);
         chorus::end_stat_tracking!(start);
     }
+    println!("CHORUS_BENCHMARK_OK");
 }
 
 criterion_group! {

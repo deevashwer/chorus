@@ -61,6 +61,20 @@ python3 ~/chorus/scripts/run_experiment.py all --force
 All commands run inside a **GNU screen** session.  If you disconnect,
 experiments keep running.  Re-run `login.py` to reconnect.
 
+### Viewing Results
+
+Results are saved on the control VM under `~/chorus/results/`.  To
+download them to your local machine (run from your local checkout):
+
+```bash
+python3 scripts/fetch_results.py            # fetch all experiments
+python3 scripts/fetch_results.py table6 figure8   # fetch specific ones
+```
+
+This uses the same SSH credentials saved by `login.py`.  Downloaded
+files go into the local `results/` directory — `.tex` tables and `.png`
+figures can be opened directly.
+
 ---
 
 ## Experiments

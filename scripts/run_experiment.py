@@ -251,6 +251,18 @@ def _log_base_dir(exp_id: str) -> str:
     return _EXP_CONFIG_KEY.get(exp_id, exp_id)
 
 
+LOG_CANARY = "CHORUS_BENCHMARK_OK"
+
+
+def _log_is_complete(path: Path) -> bool:
+    """Return True only if the log file ends with the success canary."""
+    try:
+        text = path.read_text(errors="replace")
+        return LOG_CANARY in text
+    except OSError:
+        return False
+
+
 def find_existing_logs(exp_id: str) -> Path | None:
     """Return the most-recent run directory that contains all expected log
     files, or None if no complete set of logs exists."""
@@ -268,7 +280,8 @@ def find_existing_logs(exp_id: str) -> Path | None:
         reverse=True,
     )
     for run_dir in subdirs:
-        if all((run_dir / name).exists() for name in expected):
+        logs = [run_dir / name for name in expected]
+        if all(p.exists() and _log_is_complete(p) for p in logs):
             return run_dir
     return None
 
@@ -805,12 +818,18 @@ def make_sr_runner(generate_target: str):
             log_dir = _find_or_create_sr_log_dir()
 
             server_log = log_dir / "secret_recovery_server.log"
-            if not server_log.exists():
+            if not _log_is_complete(server_log):
+                if server_log.exists():
+                    print(f"  Server log incomplete (missing canary) — re-running.")
+                    server_log.unlink()
                 _run_sr_server_benchmark(project, zone, log_dir)
 
             if needs_client:
                 client_log = log_dir / "secret_recovery_client.log"
-                if not client_log.exists():
+                if not _log_is_complete(client_log):
+                    if client_log.exists():
+                        print(f"  Client log incomplete (missing canary) — re-running.")
+                        client_log.unlink()
                     _run_sr_client_benchmark(project, zone, log_dir)
 
         script = _SR_SCRIPTS[generate_target]
