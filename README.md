@@ -110,6 +110,42 @@ Two convenience scripts let you reconnect at any time:
 
 ---
 
+## What the Setup Does (Manual Reference)
+
+If you prefer to run the steps manually, clone the repo on both VMs
+into `~/chorus` and run:
+
+**On both VMs:**
+
+```bash
+bash scripts/setup_deps.sh        # system packages + Rust
+python3 scripts/run.py build      # cargo build --release
+```
+
+**On the compute VM only:**
+
+```bash
+python3 scripts/run.py generate   # pre-generate benchmark state (~3 h)
+```
+
+**Networking:** The control VM must be able to SSH into the compute VM.
+Create `vm_config.json` in the repo root with the compute VM's
+connection details:
+
+```json
+{
+  "mode": "manual",
+  "compute": { "host": "<IP>", "user": "<USER>", "key": "<PATH_TO_KEY>" }
+}
+```
+
+`run_experiment.py` reads this file to SSH into the compute VM, start
+server binaries, set up network emulation (`tc`), and pass the
+compute VM's IP to the client via the `SERVER_IP` environment
+variable.
+
+---
+
 ## Experiments
 
 You can run experiments interactively or by ID:
