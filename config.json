@@ -5,7 +5,9 @@
     "machine_type": "c2d-standard-112",
     "boot_disk_size": "200GB",
     "image_family": "ubuntu-2204-lts",
-    "image_project": "ubuntu-os-cloud"
+    "image_project": "ubuntu-os-cloud",
+    "_vcpus": 112,
+    "_ram_gb": 224
   },
   "bench_cases": [
     {

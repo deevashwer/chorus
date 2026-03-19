@@ -16,7 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-CONFIG_FILE = Path.home() / ".chorus-eval.json"
+CONFIG_FILE = Path(__file__).resolve().parent.parent / "control_vm.json"
 LOCAL_RESULTS = Path(__file__).resolve().parent.parent / "results"
 
 
@@ -32,6 +32,11 @@ def load_config():
         sys.exit(f"Error reading {CONFIG_FILE}: {e}")
 
 
+def _ssh_target(cfg):
+    user = cfg.get("user", "ubuntu")
+    return f"{user}@{cfg['host']}"
+
+
 def scp_recursive(cfg, remote_path, local_path):
     local_path.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -40,7 +45,7 @@ def scp_recursive(cfg, remote_path, local_path):
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "LogLevel=ERROR",
-        f"gcpuser@{cfg['host']}:{remote_path}",
+        f"{_ssh_target(cfg)}:{remote_path}",
         str(local_path),
     ]
     return subprocess.run(cmd, capture_output=True, text=True)
@@ -54,7 +59,7 @@ def list_remote_experiments(cfg):
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "LogLevel=ERROR",
-        f"gcpuser@{cfg['host']}",
+        _ssh_target(cfg),
         "ls -1 ~/chorus/results/ 2>/dev/null",
     ]
     r = subprocess.run(cmd, capture_output=True, text=True)

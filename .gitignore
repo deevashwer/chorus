@@ -23,6 +23,10 @@ groth_vk
 terraform.tfstate*
 .terraform/
 
+# Per-evaluator VM connection configs
+vm_config.json
+control_vm.json
+
 # Python
 __pycache__/
 *.pyc

@@ -2,11 +2,13 @@
 """Interactive experiment runner for Chorus artifact evaluation.
 
 Run this on the control VM after setup_eval.py has completed.
-Best used inside the screen session started by login.py — that way
-long-running experiments survive disconnections.
+Best used inside a screen/tmux session — that way long-running
+experiments survive disconnections.
 
 Usage:
     python3 ~/chorus/scripts/run_experiment.py
+    python3 ~/chorus/scripts/run_experiment.py all
+    python3 ~/chorus/scripts/run_experiment.py <experiment_id>
 
 Features:
     - Interactive menu of experiments with expected durations
@@ -26,7 +28,6 @@ import signal
 import subprocess
 import sys
 import time
-import urllib.request
 from pathlib import Path
 
 REPO_DIR = Path(__file__).resolve().parent.parent
@@ -39,27 +40,21 @@ CONFIG_PATH = REPO_DIR / "config.json"
 with open(CONFIG_PATH) as _f:
     CONFIG = json.load(_f)
 
-COMPUTE_VM_NAME = CONFIG["compute_vm"]["name"]
+sys.path.insert(0, str(REPO_DIR / "scripts"))
+from ssh_utils import (
+    load_vm_config,
+    ssh_cmd as _ssh_remote,
+    ssh_cmd_raw as _ssh_raw,
+    scp_to as _scp_to,
+    scp_from as _scp_from,
+    get_remote_interface,
+)
 
 
-# ---------------------------------------------------------------------------
-# GCP metadata
-# ---------------------------------------------------------------------------
-
-def metadata(path: str) -> str:
-    url = f"http://metadata.google.internal/computeMetadata/v1/{path}"
-    req = urllib.request.Request(url, headers={"Metadata-Flavor": "Google"})
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        return resp.read().decode().strip()
-
-
-def gcp_project() -> str:
-    return metadata("project/project-id")
-
-
-def gcp_zone() -> str:
-    full = metadata("instance/zone")
-    return full.rsplit("/", 1)[-1]
+def _load_compute_cfg() -> dict:
+    """Load and return the compute VM SSH config dict."""
+    vm_cfg = load_vm_config()
+    return vm_cfg["compute"]
 
 
 # ---------------------------------------------------------------------------
@@ -115,23 +110,16 @@ def run_local(cmd, *, cwd=None, log_path=None, env_extra=None):
         subprocess.run(cmd, cwd=cwd or REPO_DIR, env=env, check=True)
 
 
-def ssh_cmd(project, zone, command, *, log_path=None):
+def ssh_cmd(cfg, command, *, log_path=None):
     """Run a command on the compute VM via SSH, streaming output."""
-    cmd = [
-        "gcloud", "compute", "ssh", COMPUTE_VM_NAME,
-        "--project", project, "--zone", zone, "--",
-        f"bash -lc {shlex.quote(command)}",
-    ]
+    from ssh_utils import _ssh_base, _target
+    cmd = _ssh_base(cfg) + [_target(cfg), f"bash -lc {shlex.quote(command)}"]
     run_local(cmd, log_path=log_path)
 
 
-def scp_from_compute(project, zone, remote_path, local_path):
+def scp_from_compute(cfg, remote_path, local_path):
     """Copy a file from the compute VM to the local machine."""
-    subprocess.run([
-        "gcloud", "compute", "scp",
-        f"{COMPUTE_VM_NAME}:{remote_path}", str(local_path),
-        "--project", project, "--zone", zone,
-    ], check=True)
+    _scp_from(cfg, remote_path, str(local_path))
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +135,6 @@ def pid_alive(pid: int) -> bool:
 
 
 def check_lock():
-    """Return lock info dict if a valid lock is held, else None."""
     if not LOCK_FILE.exists():
         return None
     try:
@@ -231,7 +218,6 @@ _SR_NEEDS_CLIENT = {
 
 
 def _expected_logs(exp_id: str) -> list[str]:
-    """Return the list of log filenames an experiment produces."""
     config_key = _EXP_CONFIG_KEY.get(exp_id, exp_id)
     if config_key not in CONFIG["experiments"]:
         return []
@@ -242,12 +228,6 @@ def _expected_logs(exp_id: str) -> list[str]:
 
 
 def _log_base_dir(exp_id: str) -> str:
-    """Return the directory name under results/ where logs are stored.
-
-    Experiments that share a config key (e.g. all SR experiments share
-    'secret_recovery') store their logs in a shared directory so they
-    don't re-run benchmarks.
-    """
     return _EXP_CONFIG_KEY.get(exp_id, exp_id)
 
 
@@ -255,7 +235,6 @@ LOG_CANARY = "CHORUS_BENCHMARK_OK"
 
 
 def _log_is_complete(path: Path) -> bool:
-    """Return True only if the log file ends with the success canary."""
     try:
         text = path.read_text(errors="replace")
         return LOG_CANARY in text
@@ -264,8 +243,6 @@ def _log_is_complete(path: Path) -> bool:
 
 
 def find_existing_logs(exp_id: str) -> Path | None:
-    """Return the most-recent run directory that contains all expected log
-    files, or None if no complete set of logs exists."""
     expected = _expected_logs(exp_id)
     if not expected:
         return None
@@ -287,14 +264,6 @@ def find_existing_logs(exp_id: str) -> Path | None:
 
 
 def prompt_rerun(exp: dict) -> str:
-    """Check for existing log files and ask what to do.
-
-    Returns:
-        'run'   — no prior logs, run from scratch
-        'reuse' — user chose to reuse existing logs (just re-plot)
-        'rerun' — user chose to re-run benchmarks
-        'skip'  — user cancelled
-    """
     prev_dir = find_existing_logs(exp["id"])
     if prev_dir is None:
         return "run"
@@ -332,13 +301,8 @@ def prompt_rerun(exp: dict) -> str:
 # Build / sync helpers
 # ---------------------------------------------------------------------------
 
-def sync_to_compute(project: str, zone: str):
-    """Sync the local repo to the compute VM and rebuild.
-
-    Uses the same tar-based approach as setup_eval.py (respects .gitignore,
-    excludes .git/).  Then rebuilds so the compute VM has up-to-date
-    scripts and binaries.
-    """
+def sync_to_compute(cfg: dict):
+    """Sync the local repo to the compute VM and rebuild."""
     gitignore = REPO_DIR / ".gitignore"
     exclude_args = ["--exclude=.git"]
     if gitignore.is_file():
@@ -349,27 +313,23 @@ def sync_to_compute(project: str, zone: str):
 
     archive = "/tmp/chorus-repo.tar.gz"
     print("    Creating archive of local repo...")
-    run_local(
-        ["tar", "czf", archive] + exclude_args +
-        ["-C", str(REPO_DIR.parent), REPO_DIR.name],
-    )
+    tar_cmd = ["tar", "czf", archive] + exclude_args
+    if sys.platform == "darwin":
+        tar_cmd += ["--no-mac-metadata", "--no-xattrs"]
+    tar_cmd += ["-C", str(REPO_DIR.parent), REPO_DIR.name]
+    run_local(tar_cmd)
     print("    Copying to compute VM...")
-    run_local([
-        "gcloud", "compute", "scp", archive,
-        f"{COMPUTE_VM_NAME}:/tmp/chorus-repo.tar.gz",
-        "--project", project, "--zone", zone,
-    ])
+    _scp_to(cfg, archive, "/tmp/chorus-repo.tar.gz")
     print("    Extracting on compute VM...")
-    ssh_cmd(project, zone,
-            "mkdir -p ~/chorus && tar xzf /tmp/chorus-repo.tar.gz "
-            "--strip-components=1 -C ~/chorus && rm /tmp/chorus-repo.tar.gz")
+    _ssh_remote(cfg,
+                "mkdir -p ~/chorus && tar xzf /tmp/chorus-repo.tar.gz "
+                "--strip-components=1 -C ~/chorus && rm /tmp/chorus-repo.tar.gz")
     print("    Rebuilding on compute VM...")
-    ssh_cmd(project, zone, "cd ~/chorus && python3 scripts/run.py build")
+    _ssh_remote(cfg, "cd ~/chorus && python3 scripts/run.py build")
 
 
 def ensure_local_build():
     """Ensure the control VM has Rust and the project is built."""
-    # Check if cargo is available
     r = subprocess.run(["bash", "-lc", "command -v cargo"],
                        capture_output=True, text=True)
     if r.returncode != 0:
@@ -384,7 +344,6 @@ def ensure_local_build():
 
 
 def ensure_matplotlib():
-    """Ensure matplotlib and numpy are available for plotting."""
     try:
         import matplotlib  # noqa: F401
     except ImportError:
@@ -397,7 +356,6 @@ def ensure_matplotlib():
 
 
 def ensure_tqdm():
-    """Ensure tqdm is available (used by generate_table10.py)."""
     try:
         import tqdm  # noqa: F401
     except ImportError:
@@ -421,40 +379,20 @@ def get_default_interface():
     return r.stdout.strip() or "ens4"
 
 
-def get_remote_interface(project, zone):
-    """Get the default network interface on the compute VM."""
-    r = subprocess.run(
-        ["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
-         "--project", project, "--zone", zone, "--",
-         "ip -o -4 route show to default | head -1 | cut -d' ' -f5"],
-        capture_output=True, text=True,
-    )
-    return r.stdout.strip() or "ens4"
+def get_compute_ip(cfg: dict) -> str:
+    """Return the compute VM's IP address (from vm_config.json)."""
+    return cfg["host"]
 
 
-def get_compute_ip(project, zone):
-    """Return the compute VM's internal IP address."""
-    r = subprocess.run(
-        ["gcloud", "compute", "instances", "describe", COMPUTE_VM_NAME,
-         "--project", project, "--zone", zone,
-         "--format=get(networkInterfaces[0].networkIP)"],
-        capture_output=True, text=True, check=True,
-    )
-    return r.stdout.strip()
-
-
-def apply_network_limit(project, zone):
-    """Apply bandwidth and latency limits on both VMs.
-
-    Values come from config.json → network_limit.
-    """
+def apply_network_limit(cfg: dict):
+    """Apply bandwidth and latency limits on both VMs."""
     nl = CONFIG["network_limit"]
     bw = nl["bandwidth_mbps"]
     rtt = nl["rtt_ms"]
-    delay = rtt // 2  # half RTT applied on each side
+    delay = rtt // 2
 
     local_iface = get_default_interface()
-    remote_iface = get_remote_interface(project, zone)
+    remote_iface = get_remote_interface(cfg)
 
     print()
     print("  " + "=" * 58)
@@ -477,18 +415,18 @@ def apply_network_limit(project, zone):
                "burst", "32kbit", "latency", "400ms"])
 
     # Compute VM (remote)
-    ssh_cmd(project, zone,
-            f"sudo tc qdisc del dev {remote_iface} root 2>/dev/null; "
-            f"sudo tc qdisc add dev {remote_iface} root handle 1: "
-            f"netem delay {delay}ms && "
-            f"sudo tc qdisc add dev {remote_iface} parent 1: tbf "
-            f"rate {bw}mbit burst 32kbit latency 400ms")
+    _ssh_remote(cfg,
+                f"sudo tc qdisc del dev {remote_iface} root 2>/dev/null; "
+                f"sudo tc qdisc add dev {remote_iface} root handle 1: "
+                f"netem delay {delay}ms && "
+                f"sudo tc qdisc add dev {remote_iface} parent 1: tbf "
+                f"rate {bw}mbit burst 32kbit latency 400ms")
 
     print("      ✓ Network limits applied on both VMs.")
     print()
 
 
-def remove_network_limit(project, zone):
+def remove_network_limit(cfg: dict):
     """Remove any tc qdiscs on both VMs (best-effort, never fails)."""
     local_iface = get_default_interface()
     subprocess.run(
@@ -496,14 +434,10 @@ def remove_network_limit(project, zone):
         capture_output=True,
     )
     try:
-        remote_iface = get_remote_interface(project, zone)
-        tc_cmd = f"sudo tc qdisc del dev {remote_iface} root 2>/dev/null || true"
-        subprocess.run(
-            ["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
-             "--project", project, "--zone", zone, "--",
-             f"bash -lc {shlex.quote(tc_cmd)}"],
-            capture_output=True,
-        )
+        remote_iface = get_remote_interface(cfg)
+        _ssh_remote(cfg,
+                    f"sudo tc qdisc del dev {remote_iface} root 2>/dev/null || true",
+                    check=False)
     except Exception:
         pass
 
@@ -514,92 +448,78 @@ def remove_network_limit(project, zone):
     print()
 
 
-def start_server_on_compute(project, zone):
+def start_server_on_compute(cfg: dict):
     """Start the Chorus network server on the compute VM in background."""
     bench_cases = ",".join(str(c["case"]) for c in CONFIG["bench_cases"])
     num_clients = ",".join(CONFIG["num_clients"])
     port = CONFIG["network"]["server_port"]
 
-    # Ensure the server binary is built (cargo bench doesn't build it)
     print("    Building server binary on compute VM...")
-    ssh_cmd(project, zone,
-            "cd ~/chorus && RUSTFLAGS='-A warnings' "
-            "cargo build --release --bin server")
+    _ssh_remote(cfg,
+                "cd ~/chorus && RUSTFLAGS='-A warnings' "
+                "cargo build --release --bin server")
 
     # Kill any leftover server from a previous interrupted run
-    ssh_cmd(project, zone,
-            f"kill $(cat /tmp/chorus_server.pid 2>/dev/null) 2>/dev/null; "
-            f"fuser -k {port}/tcp 2>/dev/null; "
-            f"rm -f /tmp/chorus_server.pid /tmp/chorus_server.log; "
-            f"sleep 1; true")
+    _ssh_remote(cfg,
+                f"kill $(cat /tmp/chorus_server.pid 2>/dev/null) 2>/dev/null; "
+                f"fuser -k {port}/tcp 2>/dev/null; "
+                f"rm -f /tmp/chorus_server.pid /tmp/chorus_server.log; "
+                f"sleep 1; true",
+                check=False)
 
-    ssh_cmd(project, zone,
-            f"cd ~/chorus && "
-            f"BENCH_CASES={bench_cases} NUM_CLIENTS={num_clients} "
-            f"SERVER_PORT={port} "
-            f"setsid ./target/release/server "
-            f"> /tmp/chorus_server.log 2>&1 & echo $! > /tmp/chorus_server.pid && sleep 1")
-    # Wait for "Server listening" (the server loads state files first, which can be slow)
+    _ssh_remote(cfg,
+                f"cd ~/chorus && "
+                f"BENCH_CASES={bench_cases} NUM_CLIENTS={num_clients} "
+                f"SERVER_PORT={port} "
+                f"setsid ./target/release/server "
+                f"> /tmp/chorus_server.log 2>&1 & echo $! > /tmp/chorus_server.pid && sleep 1")
+
     print("    Waiting for server to be ready (loading state, may take a few minutes)...")
     wait_cmd = (
         'timeout 300 bash -c \''
         'while ! grep -q "Server listening" /tmp/chorus_server.log 2>/dev/null; '
         "do sleep 2; done'"
     )
-    r = subprocess.run(
-        ["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
-         "--project", project, "--zone", zone, "--",
-         f"bash -lc {shlex.quote(wait_cmd)}"],
-        capture_output=True, text=True,
-    )
+    r = _ssh_remote(cfg, wait_cmd, check=False, capture=True)
     if r.returncode != 0:
         print("    Server did not become ready within timeout. Server log:")
-        cat_cmd = "cat /tmp/chorus_server.log 2>/dev/null || echo '[no log file]'"
-        diag = subprocess.run(
-            ["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
-             "--project", project, "--zone", zone, "--",
-             f"bash -lc {shlex.quote(cat_cmd)}"],
-            capture_output=True, text=True,
-        )
+        diag = _ssh_remote(cfg,
+                           "cat /tmp/chorus_server.log 2>/dev/null || echo '[no log file]'",
+                           check=False, capture=True)
         for line in diag.stdout.strip().splitlines():
             print(f"      {line}")
         raise RuntimeError("Server failed to start — see log above.")
     print("    ✓ Server is listening.")
 
 
-def stop_server_on_compute(project, zone):
+def stop_server_on_compute(cfg: dict):
     """Kill the Chorus network server on the compute VM (best-effort)."""
     try:
         port = CONFIG["network"]["server_port"]
-        stop_cmd = ("kill $(cat /tmp/chorus_server.pid) 2>/dev/null; "
+        _ssh_remote(cfg,
+                    f"kill $(cat /tmp/chorus_server.pid) 2>/dev/null; "
                     f"fuser -k {port}/tcp 2>/dev/null; "
-                    "rm -f /tmp/chorus_server.pid /tmp/chorus_server.log || true")
-        subprocess.run(
-            ["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
-             "--project", project, "--zone", zone, "--",
-             f"bash -lc {shlex.quote(stop_cmd)}"],
-            capture_output=True,
-        )
+                    f"rm -f /tmp/chorus_server.pid /tmp/chorus_server.log || true",
+                    check=False)
         print("    ✓ Server stopped on compute VM.")
     except Exception:
         pass
 
 
-def copy_state_dirs(project, zone):
+def copy_state_dirs(cfg: dict):
     """Copy case_*_clients_* directories from compute VM to control VM."""
     print("    Archiving state directories on compute VM...")
-    ssh_cmd(project, zone,
-            "cd ~/chorus && tar czf /tmp/chorus_case_dirs.tar.gz "
-            "case_*_clients_* 2>/dev/null || true")
+    _ssh_remote(cfg,
+                "cd ~/chorus && tar czf /tmp/chorus_case_dirs.tar.gz "
+                "case_*_clients_* 2>/dev/null || true")
     print("    Copying archive to control VM...")
-    scp_from_compute(project, zone,
-                     "/tmp/chorus_case_dirs.tar.gz",
+    scp_from_compute(cfg, "/tmp/chorus_case_dirs.tar.gz",
                      "/tmp/chorus_case_dirs.tar.gz")
     print("    Extracting on control VM...")
     run_local(["tar", "xzf", "/tmp/chorus_case_dirs.tar.gz",
                "-C", str(REPO_DIR)])
     run_local(["rm", "-f", "/tmp/chorus_case_dirs.tar.gz"])
-    ssh_cmd(project, zone, "rm -f /tmp/chorus_case_dirs.tar.gz")
+    _ssh_remote(cfg, "rm -f /tmp/chorus_case_dirs.tar.gz")
     print("    ✓ State directories copied.")
 
 
@@ -607,18 +527,8 @@ def copy_state_dirs(project, zone):
 # Experiment: Figure 5 — saVSS vs cgVSS
 # ---------------------------------------------------------------------------
 
-def run_figure5(project: str, zone: str, exp_dir: Path,
+def run_figure5(cfg: dict, exp_dir: Path,
                 reuse_from: Path | None = None):
-    """Run Figure 5: saVSS vs cgVSS (NIVSS benchmarks).
-
-    If *reuse_from* is set, benchmark logs are copied from that directory
-    and only the plotting step is executed.
-
-    Steps (when running from scratch):
-      1. sa_nivss verify-dealing on compute VM  (server mode)
-      2. sa_nivss + pv_nivss deal/receive on control VM  (client modes)
-      3. Generate plots
-    """
     import shutil
 
     exp_cfg = CONFIG["experiments"]["figure5"]
@@ -634,29 +544,25 @@ def run_figure5(project: str, zone: str, exp_dir: Path,
             shutil.copy2(src, dst)
             print(f"    ✓ {step['log']}")
     else:
-        # Group steps by VM
         compute_steps = [s for s in steps if s["vm"] == "compute"]
         control_steps = [s for s in steps if s["vm"] == "control"]
 
-        # --- Compute VM benchmarks ---
         if compute_steps:
             print()
             print("  Running benchmarks on compute VM ...")
             with timed("Compute VM benchmarks"):
-                sync_to_compute(project, zone)
+                sync_to_compute(cfg)
                 for step in compute_steps:
                     bench = step["bench"]
                     mode = step["mode"]
                     log_name = step["log"]
                     bench_cmd = f"{run_py} bench {bench}" + (f" {mode}" if mode else "")
                     remote_log = f"/tmp/{log_name}"
-                    ssh_cmd(project, zone,
+                    ssh_cmd(cfg,
                             f"cd ~/chorus && {bench_cmd} 2>&1"
                             f" | tee {remote_log}")
-                    scp_from_compute(project, zone, remote_log,
-                                     exp_dir / log_name)
+                    scp_from_compute(cfg, remote_log, exp_dir / log_name)
 
-        # --- Control VM benchmarks ---
         if control_steps:
             print()
             print("  Running benchmarks on control VM ...")
@@ -675,7 +581,6 @@ def run_figure5(project: str, zone: str, exp_dir: Path,
                         env_extra={"CARGO_FEATURES": "client-parallel-bench"},
                     )
 
-    # Plot (always runs — cheap)
     print()
     print("  Generating plots ...")
     with timed("Plotting"):
@@ -685,7 +590,6 @@ def run_figure5(project: str, zone: str, exp_dir: Path,
              "--results-dir", str(exp_dir)],
         )
 
-    # List generated files
     print()
     print("  Generated files:")
     for f in sorted(exp_dir.iterdir()):
@@ -697,32 +601,23 @@ def run_figure5(project: str, zone: str, exp_dir: Path,
 # Experiment: Secret Recovery — split into server-only and client runners
 # ---------------------------------------------------------------------------
 
-def _run_sr_server_benchmark(project: str, zone: str, exp_dir: Path):
-    """Run the server benchmark on the compute VM (BENCHMARK_TYPE=SERVER)."""
+def _run_sr_server_benchmark(cfg: dict, exp_dir: Path):
     run_py = "python3 scripts/run.py"
     print()
     print("  Running SERVER benchmark on compute VM ...")
     with timed("Server benchmark (compute VM)"):
-        sync_to_compute(project, zone)
+        sync_to_compute(cfg)
         remote_log = "/tmp/secret_recovery_server.log"
-        ssh_cmd(project, zone,
+        ssh_cmd(cfg,
                 f"cd ~/chorus && "
                 f"{run_py} bench secret_recovery server "
                 f"2>&1 | tee {remote_log}",
                 log_path=None)
-        scp_from_compute(project, zone, remote_log,
+        scp_from_compute(cfg, remote_log,
                          exp_dir / "secret_recovery_server.log")
 
 
-def _run_sr_client_benchmark(project: str, zone: str, exp_dir: Path):
-    """Run the client benchmark with network throttling.
-
-    Assumes the server log already exists in exp_dir (either from
-    _run_sr_server_benchmark or a previous run).
-
-    Steps: copy state dirs, start network server, apply network limits,
-    run client benchmark, clean up.
-    """
+def _run_sr_client_benchmark(cfg: dict, exp_dir: Path):
     run_py = "python3 scripts/run.py"
     server_started = False
     network_limited = False
@@ -731,21 +626,21 @@ def _run_sr_client_benchmark(project: str, zone: str, exp_dir: Path):
         print()
         print("  Copying pre-generated state to control VM ...")
         with timed("Copy state directories"):
-            copy_state_dirs(project, zone)
+            copy_state_dirs(cfg)
 
         print()
         print("  Starting network server on compute VM ...")
-        start_server_on_compute(project, zone)
+        start_server_on_compute(cfg)
         server_started = True
 
         print()
         print("  Building on control VM (if needed) ...")
         ensure_local_build()
 
-        compute_ip = get_compute_ip(project, zone)
-        print(f"    Compute VM internal IP: {compute_ip}")
+        compute_ip = get_compute_ip(cfg)
+        print(f"    Compute VM IP: {compute_ip}")
 
-        apply_network_limit(project, zone)
+        apply_network_limit(cfg)
         network_limited = True
 
         print()
@@ -768,9 +663,9 @@ def _run_sr_client_benchmark(project: str, zone: str, exp_dir: Path):
 
     finally:
         if network_limited:
-            remove_network_limit(project, zone)
+            remove_network_limit(cfg)
         if server_started:
-            stop_server_on_compute(project, zone)
+            stop_server_on_compute(cfg)
 
 
 _SR_SCRIPTS = {
@@ -784,7 +679,6 @@ _SR_SCRIPTS = {
 
 
 def _find_or_create_sr_log_dir() -> Path:
-    """Return the most recent secret_recovery log directory, or create one."""
     sr_base = RESULTS_DIR / "secret_recovery"
     if sr_base.is_dir():
         subdirs = sorted(
@@ -801,15 +695,9 @@ def _find_or_create_sr_log_dir() -> Path:
 
 
 def make_sr_runner(generate_target: str):
-    """Create a run function for a single SR output.
-
-    Benchmark logs are written to a shared ``results/secret_recovery/``
-    directory so that multiple experiments can reuse them.  Generated
-    outputs go to the per-experiment ``exp_dir``.
-    """
     needs_client = _SR_NEEDS_CLIENT[generate_target]
 
-    def runner(project: str, zone: str, exp_dir: Path,
+    def runner(cfg: dict, exp_dir: Path,
                reuse_from: Path | None = None):
         if reuse_from is not None:
             log_dir = reuse_from
@@ -823,7 +711,7 @@ def make_sr_runner(generate_target: str):
                 if server_log.exists():
                     print(f"  Server log incomplete (missing canary) — re-running.")
                     server_log.unlink()
-                _run_sr_server_benchmark(project, zone, log_dir)
+                _run_sr_server_benchmark(cfg, log_dir)
 
             if needs_client:
                 client_log = log_dir / "secret_recovery_client.log"
@@ -831,7 +719,7 @@ def make_sr_runner(generate_target: str):
                     if client_log.exists():
                         print(f"  Client log incomplete (missing canary) — re-running.")
                         client_log.unlink()
-                    _run_sr_client_benchmark(project, zone, log_dir)
+                    _run_sr_client_benchmark(cfg, log_dir)
 
         script = _SR_SCRIPTS[generate_target]
 
@@ -859,9 +747,8 @@ def make_sr_runner(generate_target: str):
 # Experiment: Table 10 — Parameter selection (pure computation, no benchmarks)
 # ---------------------------------------------------------------------------
 
-def run_table10(project: str, zone: str, exp_dir: Path,
+def run_table10(cfg: dict, exp_dir: Path,
                 reuse_from: Path | None = None):
-    """Generate Table 10 by computing parameters. Local-only, no VMs needed."""
     print()
     print("  Generating Table 10 (parameter computation) ...")
     with timed("Generating table10"):
@@ -889,7 +776,6 @@ EXPERIMENTS = [
         "expected_minutes": CONFIG["experiments"]["figure5"]["expected_minutes"],
         "run": run_figure5,
     },
-    # -- Secret-recovery outputs -----------------------------------------------
     {
         "id": "table9",
         "description": "Table 9: Server per-epoch costs (server benchmark only)",
@@ -926,7 +812,6 @@ EXPERIMENTS = [
         "expected_minutes": CONFIG["experiments"]["secret_recovery"]["expected_minutes"]["server_cost"],
         "run": make_sr_runner("server_cost"),
     },
-    # -- Pure computation (no benchmarks) ------------------------------------
     {
         "id": "table10",
         "description": "Table 10: Parameter selection (n, threshold) vs. corruption/offline fractions",
@@ -940,13 +825,7 @@ EXPERIMENTS = [
 # Interactive menu
 # ---------------------------------------------------------------------------
 
-def _run_all(project: str, zone: str, timings: dict, force: bool = False):
-    """Run every experiment sequentially, reusing logs where possible.
-
-    If *force* is True, ignore pre-existing logs so benchmarks re-run
-    from scratch.  Logs produced within this run are still shared across
-    experiments (via the shared secret_recovery/ directory).
-    """
+def _run_all(cfg: dict, timings: dict, force: bool = False):
     if force:
         ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         fresh_sr = RESULTS_DIR / "secret_recovery" / ts
@@ -974,7 +853,7 @@ def _run_all(project: str, zone: str, timings: dict, force: bool = False):
 
         start = time.time()
         try:
-            exp["run"](project, zone, exp_dir, reuse_from=reuse_from)
+            exp["run"](cfg, exp_dir, reuse_from=reuse_from)
             results.append((exp_id, True, time.time() - start))
             save_timing(exp_id, time.time() - start)
         except Exception as e:
@@ -1037,8 +916,7 @@ def _check_lock_or_exit():
     sys.exit(1)
 
 
-def _run_single(project, zone, exp, reuse_from):
-    """Run a single experiment (lock, execute, report)."""
+def _run_single(cfg, exp, reuse_from):
     print()
     if reuse_from:
         print(f"  Re-generating experiment: {exp['id']}  (reusing existing logs)")
@@ -1061,7 +939,7 @@ def _run_single(project, zone, exp, reuse_from):
 
     start = time.time()
     try:
-        exp["run"](project, zone, exp_dir, reuse_from=reuse_from)
+        exp["run"](cfg, exp_dir, reuse_from=reuse_from)
         success = True
     except Exception as e:
         print(f"\n  Experiment '{exp['id']}' FAILED: {e}")
@@ -1108,8 +986,9 @@ def main():
     print("=" * 62)
     print()
 
-    project = gcp_project()
-    zone = gcp_zone()
+    cfg = _load_compute_cfg()
+    print(f"  Compute VM: {cfg['user']}@{cfg['host']}")
+    print()
     _check_lock_or_exit()
 
     # --- Non-interactive mode (CLI argument) ---
@@ -1119,7 +998,7 @@ def main():
             timings = load_timings()
             acquire_lock("all", sum(e["expected_minutes"] for e in EXPERIMENTS))
             try:
-                _run_all(project, zone, timings, force=args.force)
+                _run_all(cfg, timings, force=args.force)
             finally:
                 release_lock()
             return
@@ -1130,7 +1009,7 @@ def main():
                      f"  Valid IDs: {', '.join(valid_ids)}")
 
         reuse_from = find_existing_logs(exp["id"])
-        _run_single(project, zone, exp, reuse_from)
+        _run_single(cfg, exp, reuse_from)
         return
 
     # --- Interactive mode ---
@@ -1157,7 +1036,7 @@ def main():
     if raw in ("a", "all"):
         acquire_lock("all", sum(e["expected_minutes"] for e in EXPERIMENTS))
         try:
-            _run_all(project, zone, timings)
+            _run_all(cfg, timings)
         finally:
             release_lock()
         return
@@ -1181,7 +1060,7 @@ def main():
     if action == "reuse":
         reuse_from = find_existing_logs(exp["id"])
 
-    _run_single(project, zone, exp, reuse_from)
+    _run_single(cfg, exp, reuse_from)
 
 
 if __name__ == "__main__":

@@ -5,40 +5,32 @@ Usage:
     python3 ~/chorus/scripts/login_compute.py
 """
 
-import json
 import os
-import urllib.request
+import sys
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
-
-with open(CONFIG_PATH) as _f:
-    CONFIG = json.load(_f)
-
-COMPUTE_VM_NAME = CONFIG["compute_vm"]["name"]
-
-
-def metadata(path: str) -> str:
-    url = f"http://metadata.google.internal/computeMetadata/v1/{path}"
-    req = urllib.request.Request(url, headers={"Metadata-Flavor": "Google"})
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        return resp.read().decode().strip()
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ssh_utils import load_vm_config
 
 
 def main():
-    project = metadata("project/project-id")
-    zone = metadata("instance/zone").rsplit("/", 1)[-1]
+    vm_cfg = load_vm_config()
+    cfg = vm_cfg["compute"]
 
     print()
-    print(f"  Connecting to compute VM '{COMPUTE_VM_NAME}'...")
-    print(f"  Project: {project}  Zone: {zone}")
+    print(f"  Connecting to compute VM ({cfg['user']}@{cfg['host']})...")
     print()
 
-    os.execvp("gcloud", [
-        "gcloud", "compute", "ssh", COMPUTE_VM_NAME,
-        "--project", project,
-        "--zone", zone,
-    ])
+    ssh_args = ["ssh"]
+    if cfg.get("key"):
+        ssh_args += ["-i", cfg["key"]]
+    ssh_args += [
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "LogLevel=ERROR",
+        f"{cfg['user']}@{cfg['host']}",
+    ]
+    os.execvp("ssh", ssh_args)
 
 
 if __name__ == "__main__":

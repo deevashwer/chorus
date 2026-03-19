@@ -6,87 +6,128 @@ Rust implementation and reproducibility package for the Chorus paper,
 targeting the IEEE S&P **Available**, **Functional**, and **Reproduced**
 badges.
 
-### Hardware
+The artifact uses two Ubuntu 22.04 VMs:
 
-The artifact uses two GCP VMs in the same zone:
+- **Compute VM (server):** 112 vCPUs, 224 GB RAM, 200 GB disk
+- **Control VM (client):** 8 vCPUs, 8 GB RAM, 50 GB disk
 
-- **Compute VM (server):** `c2d-standard-112` — 112 vCPUs (AMD EPYC Milan), 448 GB RAM, 200 GB disk.
-- **Control VM (client):** `e2-standard-8` — 8 vCPUs, 8 GB RAM.
+### Differences from the Paper
 
-Both run Ubuntu 22.04.  The compute VM is created and destroyed by the
-setup/teardown scripts; the control VM is pre-provisioned by the authors.
+The paper's client experiments ran on an Android phone (Snapdragon 8
+Gen 3).  This artifact uses a cloud VM as the client instead to make
+evaluation portable.  Battery measurements are skipped.  Network
+conditions (75 Mbps, 280 ms RTT) are emulated with Linux `tc`.
+Absolute timings may differ slightly; relative comparisons and
+communication costs are unaffected.
 
-### Important: Differences from the Paper
-
-The paper's client experiments ran on an **Android phone** (Snapdragon 8 Gen 3, 8 cores, 8 GB RAM).  This artifact uses a **cloud VM** as
-the client instead (8 vCPUs, 8 GB RAM) to make evaluation portable.
-As a result:
-
-- **Battery measurements cannot be reproduced** and are noted as skipped
-  in generated tables.
-- **Network conditions are emulated.** The paper's experiments used a
-  commodity WiFi connection from the phone to a server in South Asia.
-  Reproducing that during artifact evaluation is unclear, so we
-  use Linux `tc` (netem + tbf) to emulate the same measured conditions
-  (75 Mbps bandwidth, 280 ms RTT) between two co-located VMs.
-- **Absolute timings may differ slightly** from the paper.  Relative
-  comparisons and communication costs are unaffected.
 ---
 
-## Quick Start
+## Getting Started
 
-You will receive from the authors: an SSH key pair and the control VM's
-IP address.  Your local machine needs Python 3 and an SSH client.
+There are two paths.  Both converge on the same three commands.
 
-| Step | Command | Est. time |
-|------|---------|-----------|
-| Log in to the control VM | `python3 scripts/login.py` | ~30 s |
-| Set up the compute VM (idempotent) | `python3 ~/chorus/scripts/setup_eval.py` | ~3 h 10 min* |
-| Run all experiments | `python3 ~/chorus/scripts/run_experiment.py all` | ~7 h |
-| Tear down compute VM | `python3 ~/chorus/scripts/teardown.py` | ~1 min |
+### Path A: Use the Author-Provided VM
 
-\* Most of the setup time (~3 h 5 min) is spent preprocessing
-state; VM setup and building the artifact takes only ~5 min.
+The authors have pre-configured a **control VM** on GCP.  You receive
+an SSH private key file and the control VM's IP address.
 
-You can also run `run_experiment.py` without arguments for an
-interactive menu, or pass a single experiment ID (e.g. `table6`).
+### Path B: Bring Your Own VMs
 
-Benchmark logs are cached in `results/` and reused across runs since
-they take a long time to produce.  To force a full re-run from scratch:
+Provision two Ubuntu 22.04 machines that can reach each other over the
+network.
+
+| VM | Role | vCPUs | RAM | Disk |
+|----|------|-------|-----|------|
+| **Compute** | runs server benchmarks | 112 | 224 GB | 200 GB |
+| **Control** | runs client benchmarks | 8 | 8 GB | 50 GB |
+
+Requirements:
+- Both VMs run **Ubuntu 22.04** (other Debian-based distros may work but are untested).
+- SSH access from your local machine to the control VM.
+- SSH access from your local machine to the compute VM.
+- Network connectivity between the two VMs.
+
+### Common Workflow (Both Paths)
+
+Your local machine needs only Python 3 and an SSH client.
+Everything else is set up automatically by the scripts.
+
+**Step 1 — Log in** (on your local machine):
 
 ```bash
-python3 ~/chorus/scripts/run_experiment.py all --force
+python3 scripts/login.py
 ```
 
-All commands run inside a **GNU screen** session.  If you disconnect,
-experiments keep running.  Re-run `login.py` to reconnect.
+This asks for the control VM's IP, SSH user, and key.  For **Path B**
+it also asks for the compute VM's details and copies the SSH key to
+the control VM so it can reach the compute VM.  Then:
+- On first run: syncs the repo to the control VM and installs `screen`
+- Opens a persistent screen session (detach with Ctrl-A D, reconnect
+  by re-running `login.py`)
 
-### Viewing Results
-
-Results are saved on the control VM under `~/chorus/results/`.  To
-download them to your local machine (run from your local checkout):
+**Step 2 — Set up both VMs** (on the control VM):
 
 ```bash
-python3 scripts/fetch_results.py            # fetch all experiments
-python3 scripts/fetch_results.py table6 figure8   # fetch specific ones
+python3 ~/chorus/scripts/setup_eval.py
 ```
 
-This uses the same SSH credentials saved by `login.py`.  Downloaded
-files go into the local `results/` directory — `.tex` tables and `.png`
-figures can be opened directly.
+This does everything automatically:
+1. Configures the compute VM connection if not already set by
+   `login.py`.  (On GCP it auto-detects and creates the compute VM;
+   for Path B the details were already provided during login.)
+2. Installs system packages, Rust, and builds the artifact on **both
+   VMs in parallel**.
+3. Generates benchmark state on the compute VM.
+
+Estimated wall time: **~3.5 hours** (dominated by state generation on
+the compute VM; deps & build run in parallel on both VMs).
+
+**Step 3 — Run experiments** (on the control VM):
+
+```bash
+python3 ~/chorus/scripts/run_experiment.py all
+```
+
+Runs all experiments (~7 h total).  See the [Experiments](#experiments)
+table below.
+
+### Tear Down
+
+- **Path A (GCP):** run `python3 ~/chorus/scripts/teardown.py` on the
+  control VM when done — this deletes the compute VM to stop billing.
+- **Path B (own VMs):** shut down or delete your VMs through your
+  cloud provider's console when you are done.
+
+### Reconnecting
+
+Experiments run inside a screen session and survive disconnections.
+Two convenience scripts let you reconnect at any time:
+
+| Script | Where to run | What it does |
+|--------|-------------|--------------|
+| `python3 scripts/login.py` | local machine | Reconnects to the control VM screen session |
+| `python3 ~/chorus/scripts/login_compute.py` | control VM | SSHes into the compute VM (for debugging) |
 
 ---
 
 ## Experiments
 
-All parameters are read from `config.json` — nothing is hardcoded.
-Each experiment saves results to `results/<experiment_id>/<timestamp>/`.
+You can run experiments interactively or by ID:
+
+```bash
+python3 ~/chorus/scripts/run_experiment.py            # interactive menu
+python3 ~/chorus/scripts/run_experiment.py table6      # run one experiment
+python3 ~/chorus/scripts/run_experiment.py all         # run everything
+python3 ~/chorus/scripts/run_experiment.py all --force # re-run from scratch
+```
+
+Benchmark logs are cached in `results/` and reused across runs.
 
 | # | ID | Paper Reference | Est. time |
 |---|-----|-----------------|-----------|
-| 1 | `figure5` | Figure 5: saVSS vs cgVSS | ~2 h 28 mins |
-| 2 | `table9` | Table 9: Server per-epoch costs | ~3 h 30 mins |
-| 3 | `table6` | Table 6: Client secret-recovery costs | ~55 mins* |
+| 1 | `figure5` | Figure 5: saVSS vs cgVSS | ~2 h 28 min |
+| 2 | `table9` | Table 9: Server per-epoch costs | ~3 h 30 min |
+| 3 | `table6` | Table 6: Client secret-recovery costs | ~55 min* |
 | 4 | `table7` | Table 7: Committee-member costs | < 1 min* |
 | 5 | `figure8` | Figure 8: Client cost breakdown | < 1 min* |
 | 6 | `appendixA41` | Appendix A.4.1: DKG setup costs | < 1 min* |
@@ -95,3 +136,15 @@ Each experiment saves results to `results/<experiment_id>/<timestamp>/`.
 
 \* Experiments 2–7 share benchmark logs.  Once `table9` and `table6`
 have run, experiments 4–7 reuse those logs and finish instantly.
+
+### Downloading Results
+
+Results are saved on the control VM under `~/chorus/results/`.
+To download them to your local machine:
+
+```bash
+python3 scripts/fetch_results.py                 # fetch all
+python3 scripts/fetch_results.py table6 figure8  # fetch specific ones
+```
+
+Downloaded `.tex` tables and `.png` figures can be opened directly.

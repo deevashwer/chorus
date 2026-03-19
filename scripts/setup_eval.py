@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Provision and set up the compute VM from the control VM.
+"""Set up the Chorus evaluation environment.
 
-Run this on the control VM.  It uses gcloud (pre-installed on all GCP
-VMs) to create a large Ubuntu 22.04 compute VM and run the same setup
-script.
+Run this on the control VM.  On first run it configures the compute VM
+connection (GCP auto-detect or manual entry), then copies the repo,
+installs dependencies, builds the artifact, and generates benchmark
+state.
 
 Usage:
     python3 ~/chorus/scripts/setup_eval.py
@@ -13,57 +14,20 @@ detected and skipped automatically.
 """
 
 import json
-import os
-import shlex
 import subprocess
 import sys
 import time
-import urllib.request
+from pathlib import Path
 
-REPO_DIR = os.path.expanduser("~/chorus")
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
+REPO_DIR = Path(__file__).resolve().parent.parent
 
+sys.path.insert(0, str(REPO_DIR / "scripts"))
+from ssh_utils import load_vm_config, ssh_cmd, scp_to, wait_for_ssh, VM_CONFIG_PATH
+from configure_vms import configure_gcp, configure_manual, _is_on_gcp
+
+CONFIG_PATH = REPO_DIR / "config.json"
 with open(CONFIG_PATH) as _f:
     CONFIG = json.load(_f)
-
-_vm = CONFIG["compute_vm"]
-COMPUTE_VM_NAME = _vm["name"]
-MACHINE_TYPE = _vm["machine_type"]
-BOOT_DISK_SIZE = _vm["boot_disk_size"]
-IMAGE_FAMILY = _vm["image_family"]
-IMAGE_PROJECT = _vm["image_project"]
-
-
-def metadata(path: str) -> str:
-    url = f"http://metadata.google.internal/computeMetadata/v1/{path}"
-    req = urllib.request.Request(url, headers={"Metadata-Flavor": "Google"})
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        return resp.read().decode().strip()
-
-
-def gcp_project() -> str:
-    return metadata("project/project-id")
-
-
-def gcp_zone() -> str:
-    full = metadata("instance/zone")
-    return full.rsplit("/", 1)[-1]
-
-
-def gcp_network() -> str:
-    """Return the network name of the current VM's first NIC."""
-    raw = metadata("instance/network-interfaces/0/network")
-    # raw looks like "projects/<project>/global/networks/<name>"
-    return raw.rsplit("/", 1)[-1]
-
-
-def gcp_subnet() -> str | None:
-    """Return the subnet URI of the current VM's first NIC, or None."""
-    try:
-        return metadata("instance/network-interfaces/0/subnetwork")
-    except Exception:
-        return None
-
 
 
 def run(cmd, *, check=True, capture=False):
@@ -88,7 +52,6 @@ def fmt_elapsed(seconds: float) -> str:
 
 
 def timed(label: str):
-    """Context manager that prints wall-clock time for a block."""
     class _Timer:
         def __enter__(self):
             self.t0 = time.time()
@@ -99,175 +62,190 @@ def timed(label: str):
     return _Timer()
 
 
-def vm_exists(project: str, zone: str) -> bool:
-    r = run(["gcloud", "compute", "instances", "describe", COMPUTE_VM_NAME,
-             "--project", project, "--zone", zone, "--format=json"],
-            check=False, capture=True)
-    if r.returncode != 0:
-        return False
-    info = json.loads(r.stdout)
-    status = info["status"]
-    print(f"    Compute VM already exists (status: {status})")
-    return status == "RUNNING"
+# ---------------------------------------------------------------------------
+# Configuration — runs on first invocation if vm_config.json is missing
+# ---------------------------------------------------------------------------
+
+def ensure_configured():
+    """If vm_config.json already exists, offer to keep it. Otherwise
+    auto-detect GCP or ask for manual details."""
+    if VM_CONFIG_PATH.exists():
+        try:
+            existing = json.loads(VM_CONFIG_PATH.read_text())
+            c = existing.get("compute", {})
+            mode = existing.get("mode", "unknown")
+            print(f"  Found existing compute VM config (mode: {mode}):")
+            print(f"    Host: {c.get('host', '?')}")
+            print(f"    User: {c.get('user', '?')}")
+            print(f"    Key:  {c.get('key', '(default)')}")
+            print()
+            answer = input("  Keep these settings? [Y/n]: ").strip().lower()
+            if answer in ("", "y", "yes"):
+                return
+        except (json.JSONDecodeError, KeyError):
+            pass
+        print()
+
+    on_gcp = _is_on_gcp()
+
+    if on_gcp:
+        print("  Detected: this machine is a GCP VM.")
+        print()
+        print("  Choose how to set up the compute VM:")
+        print()
+        print("    [1] GCP (auto) — create a compute VM in the same")
+        print("        GCP project/zone using gcloud (recommended)")
+        print()
+        print("    [2] Manual — provide your own compute VM's IP,")
+        print("        SSH user, and key (any cloud or bare metal)")
+        print()
+        try:
+            choice = input("  Choice [1/2]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            sys.exit("\n  Cancelled.")
+
+        if choice == "1":
+            configure_gcp()
+        else:
+            configure_manual()
+    else:
+        print("  This machine is not a GCP VM — using manual configuration.")
+        configure_manual()
 
 
-def create_vm(project: str, zone: str, network: str, subnet: str | None):
-    print(f"    Creating VM '{COMPUTE_VM_NAME}' ({MACHINE_TYPE}, Ubuntu 22.04)...")
-    print(f"    Using network '{network}', subnet '{subnet or '(auto)'}'")
-    cmd = ["gcloud", "compute", "instances", "create", COMPUTE_VM_NAME,
-           "--project", project,
-           "--zone", zone,
-           "--machine-type", MACHINE_TYPE,
-           "--boot-disk-size", BOOT_DISK_SIZE,
-           "--image-family", IMAGE_FAMILY,
-           "--image-project", IMAGE_PROJECT,
-           "--network", network]
-    if subnet:
-        cmd += ["--subnet", subnet]
-    run(cmd)
+# ---------------------------------------------------------------------------
+# Control VM (local) setup
+# ---------------------------------------------------------------------------
+
+def setup_control_vm():
+    """Install deps and build on the control VM (this machine)."""
+    print("  Installing system packages & Rust on control VM...")
+    run(["bash", str(REPO_DIR / "scripts" / "setup_deps.sh")])
+
+    # Source cargo env and build
+    print("  Building on control VM...")
+    run(["bash", "-lc", f"cd {REPO_DIR} && python3 scripts/run.py build"])
 
 
-def wait_for_ssh(project: str, zone: str, retries: int = 30, delay: int = 10):
-    print("\n    Waiting for the compute VM to accept SSH connections...")
-    for i in range(retries):
-        r = run(["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
-                 "--project", project, "--zone", zone, "--",
-                 "echo ok"],
-                check=False, capture=True)
-        if r.returncode == 0:
-            print("    SSH is ready.")
-            return
-        print(f"    Attempt {i + 1}/{retries} — not ready yet, retrying in {delay}s...")
-        time.sleep(delay)
-    sys.exit("    Timed out waiting for SSH on the compute VM.")
+# ---------------------------------------------------------------------------
+# Compute VM (remote) provisioning
+# ---------------------------------------------------------------------------
 
-
-def ssh_cmd(project: str, zone: str, command: str):
-    run(["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
-         "--project", project, "--zone", zone, "--",
-         f"bash -lc {shlex.quote(command)}"])
-
-
-def copy_repo(project: str, zone: str):
+def copy_repo(cfg: dict):
     """Rsync the working tree to the compute VM, excluding .gitignore'd files."""
-    gitignore = os.path.join(REPO_DIR, ".gitignore")
-    cmd = [
-        "gcloud", "compute", "scp", "--recurse",
-        "--project", project, "--zone", zone,
-    ]
-    # Build a tar locally, excluding patterns from .gitignore and .git/
-    # Then scp + extract, so we don't need rsync on both sides.
+    gitignore = REPO_DIR / ".gitignore"
     exclude_args = ["--exclude=.git"]
-    if os.path.isfile(gitignore):
+    if gitignore.is_file():
         with open(gitignore) as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#"):
-                    # Strip trailing slashes — tar --exclude doesn't match with them
                     exclude_args.append(f"--exclude={line.rstrip('/')}")
+
     archive = "/tmp/chorus-repo.tar.gz"
-    run(["tar", "czf", archive] + exclude_args + ["-C", os.path.dirname(REPO_DIR),
-         os.path.basename(REPO_DIR)])
-    # Copy the tarball to the compute VM
-    run(["gcloud", "compute", "scp", archive,
-         f"{COMPUTE_VM_NAME}:/tmp/chorus-repo.tar.gz",
-         "--project", project, "--zone", zone])
-    # Extract on the compute VM (strip the top-level directory name)
-    ssh_cmd(project, zone,
-            "mkdir -p ~/chorus && tar xzf /tmp/chorus-repo.tar.gz --strip-components=1 -C ~/chorus && rm /tmp/chorus-repo.tar.gz")
+    tar_cmd = ["tar", "czf", archive] + exclude_args
+    if sys.platform == "darwin":
+        tar_cmd += ["--no-mac-metadata", "--no-xattrs"]
+    tar_cmd += ["-C", str(REPO_DIR.parent), REPO_DIR.name]
+    run(tar_cmd)
+    scp_to(cfg, archive, "/tmp/chorus-repo.tar.gz")
+    ssh_cmd(cfg,
+            "mkdir -p ~/chorus && "
+            "tar xzf /tmp/chorus-repo.tar.gz --strip-components=1 -C ~/chorus && "
+            "rm /tmp/chorus-repo.tar.gz")
 
 
 SAVE_STATE_LOG = "/tmp/chorus_save_state.log"
 LOG_CANARY = "CHORUS_BENCHMARK_OK"
 
 
-def save_state_complete(project: str, zone: str) -> bool:
-    """Check whether a previous SAVE_STATE run completed on the compute VM."""
-    check = f"grep -q {LOG_CANARY} {SAVE_STATE_LOG} 2>/dev/null"
-    r = run(["gcloud", "compute", "ssh", COMPUTE_VM_NAME,
-             "--project", project, "--zone", zone, "--",
-             f"bash -lc {shlex.quote(check)}"],
-            check=False, capture=True)
+def save_state_complete(cfg: dict) -> bool:
+    r = ssh_cmd(cfg, f"grep -q {LOG_CANARY} {SAVE_STATE_LOG} 2>/dev/null",
+                check=False, capture=True)
     return r.returncode == 0
 
 
-def provision(project: str, zone: str):
-    with timed("Copy repo to compute VM"):
-        copy_repo(project, zone)
-
-    with timed("Install system packages & Rust"):
-        ssh_cmd(project, zone, "cd ~/chorus && bash scripts/setup_deps.sh")
-
-    with timed("Build (cargo build --release)"):
-        ssh_cmd(project, zone, "cd ~/chorus && python3 scripts/run.py build")
-
-    if save_state_complete(project, zone):
-        print("\n    SAVE_STATE already completed (canary found) — skipping generation.")
-    else:
-        with timed("Generate benchmark state"):
-            ssh_cmd(project, zone,
-                    f"cd ~/chorus && python3 scripts/run.py generate "
-                    f"2>&1 | tee {SAVE_STATE_LOG}")
-
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     print()
     print("=" * 62)
-    print("  Chorus Evaluation — Compute VM Setup")
+    print("  Chorus Evaluation — Setup")
     print("=" * 62)
     print()
-    print("  This script creates a large Ubuntu 22.04 compute VM")
-    print("  and runs the same setup script to install deps and")
-    print("  build the artifact.")
-    print()
-    print("  All steps are idempotent — you can re-run this safely.")
-    print()
-
-    print("  Detecting GCP project, zone, and network from instance metadata...")
-    project = gcp_project()
-    zone = gcp_zone()
-    network = gcp_network()
-    subnet = gcp_subnet()
-    print(f"    Project: {project}")
-    print(f"    Zone:    {zone}")
-    print(f"    Network: {network}")
-    print(f"    Subnet:  {subnet or '(auto)'}")
+    print("  This script sets up both the control VM (this machine)")
+    print("  and the compute VM (remote).  All steps are idempotent.")
     print()
 
     overall_t0 = time.time()
 
+    # Phase 1: configure the compute VM connection
     print("-" * 62)
-    print("  Phase 1: Ensure the compute VM exists")
+    print("  Phase 1: Configure compute VM connection")
     print("-" * 62)
+    print()
+    ensure_configured()
 
-    with timed("Phase 1 — VM creation"):
-        if vm_exists(project, zone):
-            print(f"    Skipping creation — '{COMPUTE_VM_NAME}' is already running.")
-        else:
-            create_vm(project, zone, network, subnet)
-            wait_for_ssh(project, zone)
-
+    # Phase 2: verify connectivity
+    vm_cfg = load_vm_config()
+    cfg = vm_cfg["compute"]
     print()
     print("-" * 62)
-    print("  Phase 2: Install dependencies and build the artifact")
+    print(f"  Phase 2: Verify SSH to {cfg['user']}@{cfg['host']}")
+    print("-" * 62)
+    wait_for_ssh(cfg, retries=6, delay=5)
+
+    # Phase 3: install deps & build on both VMs in parallel
+    print()
+    print("-" * 62)
+    print("  Phase 3: Install deps & build on both VMs (parallel)")
+    print("-" * 62)
+    print()
+
+    control_log = REPO_DIR / "control_setup.log"
+    print(f"  Starting control VM setup in background (log: {control_log})")
+    control_proc = subprocess.Popen(
+        ["bash", "-lc",
+         f"cd {REPO_DIR} && bash scripts/setup_deps.sh && "
+         f"python3 scripts/run.py build"],
+        stdout=open(control_log, "w"),
+        stderr=subprocess.STDOUT,
+    )
+
+    with timed("Compute VM (copy, deps, build)"):
+        copy_repo(cfg)
+        ssh_cmd(cfg, "cd ~/chorus && bash scripts/setup_deps.sh")
+        ssh_cmd(cfg, "cd ~/chorus && python3 scripts/run.py build")
+
+    print("\n  Waiting for control VM setup to finish...")
+    rc = control_proc.wait()
+    if rc != 0:
+        sys.exit(f"  Control VM setup failed (exit {rc}). See {control_log}")
+    print("  Control VM setup done.")
+
+    # Phase 4: generate benchmark state on compute VM
+    print()
+    print("-" * 62)
+    print("  Phase 4: Generate benchmark state on compute VM")
     print("-" * 62)
 
-    with timed("Phase 2 — provision (copy, deps, build, generate)"):
-        provision(project, zone)
+    if save_state_complete(cfg):
+        print("\n    SAVE_STATE already completed (canary found) — skipping.")
+    else:
+        with timed("Generate benchmark state (~3 h)"):
+            ssh_cmd(cfg,
+                    f"cd ~/chorus && python3 scripts/run.py generate "
+                    f"2>&1 | tee {SAVE_STATE_LOG}")
 
     overall_elapsed = time.time() - overall_t0
     print()
     print("=" * 62)
     print(f"  Setup complete!  Total wall time: {fmt_elapsed(overall_elapsed)}")
     print()
-    print("  The compute VM is ready.")
-    print()
-    print("  Next step — run experiments:")
+    print("  Both VMs are ready.  Next step — run experiments:")
     print("    python3 ~/chorus/scripts/run_experiment.py")
-    print()
-    print("  When you are finished with all experiments, tear down")
-    print("  the compute VM to stop billing:")
-    print("    python3 ~/chorus/scripts/teardown.py")
     print("=" * 62)
     print()
 
