@@ -9,7 +9,7 @@ echo "=== Installing system packages ==="
 sudo apt-get update -qq
 sudo apt-get install -y --no-install-recommends \
     libgmp-dev libmpfr-dev libssl-dev m4 build-essential pkg-config \
-    cmake python3 curl
+    cmake python3 python3-pip curl
 
 echo "=== Installing Rust ==="
 if ! command -v cargo &>/dev/null; then

@@ -6,7 +6,6 @@ on any cloud provider CLI.  Connection details are read from
 """
 
 import json
-import os
 import shlex
 import subprocess
 import sys

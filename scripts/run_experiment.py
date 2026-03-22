@@ -23,6 +23,7 @@ import datetime
 import json
 import os
 import shlex
+import socket
 import argparse
 import signal
 import subprocess
@@ -55,6 +56,22 @@ def _load_compute_cfg() -> dict:
     """Load and return the compute VM SSH config dict."""
     vm_cfg = load_vm_config()
     return vm_cfg["compute"]
+
+
+def _save_compute_server_ip(server_ip: str) -> None:
+    """Persist a discovered server IP for future client benchmarks."""
+    vm_cfg = load_vm_config()
+    vm_cfg.setdefault("compute", {})["server_ip"] = server_ip
+    (REPO_DIR / "vm_config.json").write_text(json.dumps(vm_cfg, indent=2) + "\n")
+
+
+def _port_is_reachable(ip: str, port: int, timeout: float = 3.0) -> bool:
+    """Return True when *ip:port* accepts a TCP connection."""
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -380,8 +397,40 @@ def get_default_interface():
 
 
 def get_compute_ip(cfg: dict) -> str:
-    """Return the compute VM's IP address (from vm_config.json)."""
-    return cfg["host"]
+    """Return the configured data-plane IP address for client benchmarks."""
+    return str(cfg.get("server_ip") or cfg["host"])
+
+
+def validate_compute_ip_for_client_benchmark(cfg: dict) -> str:
+    """Fail fast if the configured IP cannot reach the compute server port."""
+    port = CONFIG["network"]["server_port"]
+    compute_ip = get_compute_ip(cfg)
+    if _port_is_reachable(compute_ip, port):
+        return compute_ip
+
+    print()
+    print("  It looks like external-IP connections to the compute VM on "
+          f"port {port} are getting blocked for {compute_ip}.")
+    internal_ip = input(
+        "  Please either enable those external-IP connections on port "
+        f"{port}, or, easier, enter an internal IP for the compute VM "
+        "to try now and cache for future runs.\n"
+        "  Internal IP to try (leave blank to abort): "
+    ).strip()
+    if internal_ip and internal_ip != compute_ip and _port_is_reachable(internal_ip, port):
+        _save_compute_server_ip(internal_ip)
+        print(f"    Saved {internal_ip} to vm_config.json as compute.server_ip.")
+        return internal_ip
+
+    raise RuntimeError(
+        "It looks like external-IP connections to the compute VM on port "
+        f"{port} are getting blocked for {compute_ip}. "
+        + (
+            f"The provided internal IP {internal_ip} was not reachable either."
+            if internal_ip and internal_ip != compute_ip
+            else "No internal IP was provided."
+        )
+    )
 
 
 def apply_network_limit(cfg: dict):
@@ -448,6 +497,33 @@ def remove_network_limit(cfg: dict):
     print()
 
 
+def _spawn_chorus_server_remote(
+    cfg: dict, bench_cases: str, num_clients: str, port: int,
+) -> None:
+    """Start the server via remote python so the SSH session can exit (shell ``&`` can hang)."""
+    script = f"""import os, subprocess
+os.chdir(os.path.expanduser("~/chorus"))
+env = os.environ.copy()
+env.update({{
+    "BENCH_CASES": {repr(bench_cases)},
+    "NUM_CLIENTS": {repr(num_clients)},
+    "SERVER_PORT": {repr(str(port))},
+}})
+log = open("/tmp/chorus_server.log", "wb", buffering=0)
+p = subprocess.Popen(
+    ["./target/release/server"],
+    stdin=subprocess.DEVNULL,
+    stdout=log,
+    stderr=subprocess.STDOUT,
+    close_fds=True,
+    env=env,
+    start_new_session=True,
+)
+open("/tmp/chorus_server.pid", "w").write(str(p.pid))
+"""
+    _ssh_remote(cfg, f"python3 -c {shlex.quote(script)}")
+
+
 def start_server_on_compute(cfg: dict):
     """Start the Chorus network server on the compute VM in background."""
     bench_cases = ",".join(str(c["case"]) for c in CONFIG["bench_cases"])
@@ -467,12 +543,7 @@ def start_server_on_compute(cfg: dict):
                 f"sleep 1; true",
                 check=False)
 
-    _ssh_remote(cfg,
-                f"cd ~/chorus && "
-                f"BENCH_CASES={bench_cases} NUM_CLIENTS={num_clients} "
-                f"SERVER_PORT={port} "
-                f"setsid ./target/release/server "
-                f"> /tmp/chorus_server.log 2>&1 & echo $! > /tmp/chorus_server.pid && sleep 1")
+    _spawn_chorus_server_remote(cfg, bench_cases, num_clients, port)
 
     print("    Waiting for server to be ready (loading state, may take a few minutes)...")
     wait_cmd = (
@@ -637,7 +708,7 @@ def _run_sr_client_benchmark(cfg: dict, exp_dir: Path):
         print("  Building on control VM (if needed) ...")
         ensure_local_build()
 
-        compute_ip = get_compute_ip(cfg)
+        compute_ip = validate_compute_ip_for_client_benchmark(cfg)
         print(f"    Compute VM IP: {compute_ip}")
 
         apply_network_limit(cfg)

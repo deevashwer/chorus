@@ -91,6 +91,12 @@ python3 ~/chorus/scripts/run_experiment.py all
 Runs all experiments (~7 h total).  See the [Experiments](#experiments)
 table below.
 
+> Note:
+> If SSH works but TCP connections to the compute VM's external IP on
+> port `32000` are blocked, `run_experiment.py` may ask for an internal
+> IP during the client benchmark portion of this step and cache it for
+> future runs.
+
 ### Tear Down
 
 - **Path A (GCP):** run `python3 ~/chorus/scripts/teardown.py` on the
@@ -143,6 +149,10 @@ connection details:
 server binaries, set up network emulation (`tc`), and pass the
 compute VM's IP to the client via the `SERVER_IP` environment
 variable.
+
+If client benchmarks cannot reach the compute VM on the configured
+external IP and port `32000`, `run_experiment.py` will prompt for an
+internal IP during the client benchmark step.
 
 ---
 
