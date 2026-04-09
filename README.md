@@ -225,8 +225,20 @@ The following assumes the target Android device runs Android 14 with a
 and the `arm64-v8a` ABI.  Adjust if your device differs.
 
 > If you change the Android API level, update these files:
-> `chorus/.cargo/config.toml`, `chorus/class_group/.cargo/config.toml`,
-> `chorus/gmp-mpfr-sys/build.rs`, and `chorus/class_group/build.rs`.
+> `.cargo/config.toml`, `class_group/.cargo/config.toml`,
+> and `class_group/build.rs`.
+
+#### Patching gmp-mpfr-sys for Android
+
+The upstream `gmp-mpfr-sys` crate does not support Android
+cross-compilation.  A patch is provided in `patches/gmp-mpfr-sys-android.patch`.
+Apply it after cargo fetches the crate source:
+
+```bash
+cargo fetch
+GMP_SRC=$(find ~/.cargo/registry/src -path "*/gmp-mpfr-sys-1.6.*/build.rs" -exec dirname {} \; | head -1)
+patch -p1 -d "$GMP_SRC" < patches/gmp-mpfr-sys-android.patch
+```
 
 Set up the following environment variables:
 

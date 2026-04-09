@@ -1,0 +1,51 @@
+--- a/build.rs	2026-04-09 01:16:29
++++ b/build.rs	2026-04-09 01:17:23
+@@ -50,6 +50,7 @@
+ enum Target {
+     Mingw,
+     Msvc,
++    Android,
+     Other,
+ }
+
+@@ -112,6 +113,8 @@
+         Target::Msvc
+     } else if raw_target.contains("-windows-gnu") {
+         Target::Mingw
++    } else if raw_target.contains("android") {
++        Target::Android
+     } else {
+         Target::Other
+     };
+@@ -652,6 +655,20 @@
+         conf.push_str(" --host ");
+         conf.push_str(get_actual_cross_target(cross_target));
+     }
++    if env.target == Target::Android {
++        // Set compiler and flags to build for Android.
++        // Assumes ANDROID_TOOLCHAIN env var is set.
++        let toolchain = env::var("ANDROID_TOOLCHAIN").unwrap();
++        let api = "34"; // minSdkVersion
++        let cross_target = env.cross_target.clone().unwrap();
++        env::set_var("AR", format!("{}/llvm-ar", toolchain));
++        env::set_var("CC", format!("{}/{}{}-clang", toolchain, cross_target, api));
++        env::set_var("AS", format!("{}/{}{}-clang", toolchain, cross_target, api));
++        env::set_var("CXX", format!("{}/{}{}-clang++", toolchain, cross_target, api));
++        env::set_var("LD", format!("{}/ld", toolchain));
++        env::set_var("RANLIB", format!("{}/llvm-ranlib", toolchain));
++        env::set_var("STRIP", format!("{}/llvm-strip", toolchain));
++    }
+     configure(&build_dir, &OsString::from(conf));
+     make_and_check(env, &build_dir);
+     let build_lib = build_dir.join(".libs").join("libgmp.a");
+@@ -1318,6 +1335,10 @@
+         && host[machine_x86_64.len()..] == target[machine_i686.len()..]
+         && !target.contains("-windows-gnu")
+     {
++        return true;
++    }
++    // Allow cross-compilation to Android
++    if target.contains("android") {
+         return true;
+     }
+
