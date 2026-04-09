@@ -2,6 +2,7 @@
 name = "chorus"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 tokio = { version = "1.16", features = ["full"] }
@@ -46,8 +47,8 @@ bytes = { version = "^1.1.0", features = ["serde"] }
 criterion = ">=0.2"
 serde_json = "1.0"
 
-[patch.crates-io]
-gmp-mpfr-sys = { path = "./gmp-mpfr-sys/" } # a patch that allows for cross-compilation to Android
+# For Android cross-compilation, apply patches/gmp-mpfr-sys-android.patch
+# to the upstream gmp-mpfr-sys source (see README for instructions).
 
 [features]
 # default = ["std", "print-trace", "parallel", "deterministic", "client-parallel"]
