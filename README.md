@@ -18,7 +18,8 @@ Gen 3).  This artifact uses a cloud VM as the client instead to make
 evaluation portable.  Battery measurements are skipped.  Network
 conditions (75 Mbps, 280 ms RTT) are emulated with Linux `tc`.
 Absolute timings may differ slightly; relative comparisons and
-communication costs are unaffected.
+communication costs are unaffected.  Instructions for running on
+Android are provided at the bottom of this README.
 
 ---
 
