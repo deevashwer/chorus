@@ -1,38 +1,19 @@
 # Chorus: Secret Recovery with Ephemeral Client Committees
 
-**IEEE S&P 2026 Artifact**
+**IEEE S&P 2026**
 
-Rust implementation and reproducibility package for the Chorus paper,
-targeting the IEEE S&P **Available**, **Functional**, and **Reproduced**
-badges.
+Rust implementation and reproducibility package for the Chorus paper.
 
-The artifact uses two Ubuntu 22.04 VMs:
-
-- **Compute VM (server):** 112 vCPUs, 224 GB RAM, 200 GB disk
-- **Control VM (client):** 8 vCPUs, 8 GB RAM, 50 GB disk
-
-### Differences from the Paper
-
-The paper's client experiments ran on an Android phone (Snapdragon 8
-Gen 3).  This artifact uses a cloud VM as the client instead to make
-evaluation portable.  Battery measurements are skipped.  Network
-conditions (75 Mbps, 280 ms RTT) are emulated with Linux `tc`.
-Absolute timings may differ slightly; relative comparisons and
-communication costs are unaffected.  Instructions for running on
-Android are provided at the bottom of this README.
+Reproducing the experiments requires two Ubuntu 22.04 VMs.  The
+paper's client experiments ran on an Android phone (Snapdragon 8
+Gen 3); the VM setup emulates network conditions (75 Mbps, 280 ms RTT)
+with Linux `tc` instead, so battery measurements are skipped.
+Instructions for running on Android are provided at the bottom of
+this README.
 
 ---
 
 ## Getting Started
-
-There are two paths.  Both converge on the same three commands.
-
-### Path A: Use the Author-Provided VM
-
-The authors have pre-configured a **control VM** on GCP.  You receive
-an SSH private key file and the control VM's IP address.
-
-### Path B: Bring Your Own VMs
 
 Provision two Ubuntu 22.04 machines that can reach each other over the
 network.
@@ -48,7 +29,7 @@ Requirements:
 - SSH access from your local machine to the compute VM.
 - Network connectivity between the two VMs.
 
-### Common Workflow (Both Paths)
+### Workflow
 
 Your local machine needs only Python 3 and an SSH client.
 Everything else is set up automatically by the scripts.
@@ -59,9 +40,9 @@ Everything else is set up automatically by the scripts.
 python3 scripts/login.py
 ```
 
-This asks for the control VM's IP, SSH user, and key.  For **Path B**
-it also asks for the compute VM's details and copies the SSH key to
-the control VM so it can reach the compute VM.  Then:
+This asks for the control VM's IP, SSH user, and key, as well as the
+compute VM's details, and copies the SSH key to the control VM so it
+can reach the compute VM.  Then:
 - On first run: syncs the repo to the control VM and installs `screen`
 - Opens a persistent screen session (detach with Ctrl-A D, reconnect
   by re-running `login.py`)
@@ -74,8 +55,7 @@ python3 ~/chorus/scripts/setup_eval.py
 
 This does everything automatically:
 1. Configures the compute VM connection if not already set by
-   `login.py`.  (On GCP it auto-detects and creates the compute VM;
-   for Path B the details were already provided during login.)
+   `login.py`.
 2. Installs system packages, Rust, and builds the artifact on **both
    VMs in parallel**.
 3. Generates benchmark state on the compute VM.
@@ -100,10 +80,8 @@ table below.
 
 ### Tear Down
 
-- **Path A (GCP):** run `python3 ~/chorus/scripts/teardown.py` on the
-  control VM when done — this deletes the compute VM to stop billing.
-- **Path B (own VMs):** shut down or delete your VMs through your
-  cloud provider's console when you are done.
+Shut down or delete your VMs through your cloud provider's console
+when you are done.
 
 ### Reconnecting
 
