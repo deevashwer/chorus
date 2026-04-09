@@ -5,6 +5,9 @@
 # Usage:  cd ~/chorus && bash scripts/setup_deps.sh
 set -e
 
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+
 echo "=== Installing system packages ==="
 sudo apt-get update -qq
 sudo apt-get install -y --no-install-recommends \

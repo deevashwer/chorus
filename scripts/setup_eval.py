@@ -58,12 +58,12 @@ def timed(label: str):
             return self
         def __exit__(self, *_):
             elapsed = time.time() - self.t0
-            print(f"\n  ⏱  {label}: {fmt_elapsed(elapsed)}")
+            print(f"\n  [time] {label}: {fmt_elapsed(elapsed)}")
     return _Timer()
 
 
 # ---------------------------------------------------------------------------
-# Configuration — runs on first invocation if vm_config.json is missing
+# Configuration -- runs on first invocation if vm_config.json is missing
 # ---------------------------------------------------------------------------
 
 def ensure_configured():
@@ -93,10 +93,10 @@ def ensure_configured():
         print()
         print("  Choose how to set up the compute VM:")
         print()
-        print("    [1] GCP (auto) — create a compute VM in the same")
+        print("    [1] GCP (auto) -- create a compute VM in the same")
         print("        GCP project/zone using gcloud (recommended)")
         print()
-        print("    [2] Manual — provide your own compute VM's IP,")
+        print("    [2] Manual -- provide your own compute VM's IP,")
         print("        SSH user, and key (any cloud or bare metal)")
         print()
         try:
@@ -109,7 +109,7 @@ def ensure_configured():
         else:
             configure_manual()
     else:
-        print("  This machine is not a GCP VM — using manual configuration.")
+        print("  This machine is not a GCP VM -- using manual configuration.")
         configure_manual()
 
 
@@ -172,7 +172,7 @@ def save_state_complete(cfg: dict) -> bool:
 def main():
     print()
     print("=" * 62)
-    print("  Chorus Evaluation — Setup")
+    print("  Chorus Evaluation -- Setup")
     print("=" * 62)
     print()
     print("  This script sets up both the control VM (this machine)")
@@ -232,7 +232,7 @@ def main():
     print("-" * 62)
 
     if save_state_complete(cfg):
-        print("\n    SAVE_STATE already completed (canary found) — skipping.")
+        print("\n    SAVE_STATE already completed (canary found) -- skipping.")
     else:
         with timed("Generate benchmark state (~3 h)"):
             ssh_cmd(cfg,
@@ -244,7 +244,7 @@ def main():
     print("=" * 62)
     print(f"  Setup complete!  Total wall time: {fmt_elapsed(overall_elapsed)}")
     print()
-    print("  Both VMs are ready.  Next step — run experiments:")
+    print("  Both VMs are ready.  Next step -- run experiments:")
     print("    python3 ~/chorus/scripts/run_experiment.py")
     print("=" * 62)
     print()

@@ -78,7 +78,7 @@ def cmd_build():
     env = {"RUSTFLAGS": "-A warnings"}
     run(["cargo", "build", "--release"], cwd=ROOT / "class_group", env_extra=env)
     run(["cargo", "build", "--release"], env_extra=env)
-    print(f"\n⏱  Build: {fmt_elapsed(time.time() - t0)}")
+    print(f"\n[time] Build: {fmt_elapsed(time.time() - t0)}")
 
 
 def cmd_generate():
@@ -87,7 +87,7 @@ def cmd_generate():
     env = _env_defaults()
     env["BENCHMARK_TYPE"] = "SAVE_STATE"
     run(["cargo", "bench", "--bench", "secret_recovery"], env_extra=env)
-    print(f"\n⏱  Generate: {fmt_elapsed(time.time() - t0)}")
+    print(f"\n[time] Generate: {fmt_elapsed(time.time() - t0)}")
 
 
 def cmd_bench(bench_name, mode=None):
@@ -119,7 +119,7 @@ def cmd_bench(bench_name, mode=None):
     if features:
         cmd += ["--features", features]
     run(cmd, env_extra=env)
-    print(f"\n⏱  Bench {label}: {fmt_elapsed(time.time() - t0)}")
+    print(f"\n[time] Bench {label}: {fmt_elapsed(time.time() - t0)}")
 
 
 def cmd_serve():

@@ -71,7 +71,7 @@ def list_remote_experiments(cfg):
 def main():
     print()
     print("=" * 62)
-    print("  Chorus — Fetch Results")
+    print("  Chorus -- Fetch Results")
     print("=" * 62)
     print()
 

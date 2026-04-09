@@ -2,7 +2,7 @@
 """Generate Table 10: Parameter selection (n, threshold) vs. corruption and
 offline fractions.
 
-This is a pure computation — no benchmark logs are needed.
+This is a pure computation -- no benchmark logs are needed.
 Parameters are read from config.json (experiments.table10).
 
 The two security bounds (privacy / availability) are quadratic inequalities
@@ -64,7 +64,7 @@ def compute_params():
                 if (t_priv is not None and t_avail is not None
                         and t_priv <= t_avail <= n):
                     results[(corrupt_f, avail_f)] = (n, t_priv)
-                    print(f"    corrupt={corrupt_f:.2f}  avail={avail_f:.2f}  →  n={n}, t={t_priv}")
+                    print(f"    corrupt={corrupt_f:.2f}  avail={avail_f:.2f}  ->  n={n}, t={t_priv}")
                     break
                 n += 1
     return results

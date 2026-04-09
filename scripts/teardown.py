@@ -53,13 +53,13 @@ def teardown_gcp(vm_cfg):
     elapsed = time.time() - t0
 
     if r.returncode == 0:
-        print(f"  Done — '{vm_name}' has been deleted.")
+        print(f"  Done -- '{vm_name}' has been deleted.")
     else:
         print(f"  Deletion failed (exit code {r.returncode}).")
         sys.exit(r.returncode)
 
     m, s = divmod(int(elapsed), 60)
-    print(f"\n  ⏱  Tear down: {m}m {s}s")
+    print(f"\n  [time] Tear down: {m}m {s}s")
 
 
 def teardown_manual():
@@ -77,13 +77,13 @@ def teardown_manual():
 def main():
     print()
     print("=" * 62)
-    print("  Chorus Evaluation — Tear Down")
+    print("  Chorus Evaluation -- Tear Down")
     print("=" * 62)
     print()
 
     vm_cfg = load_vm_config()
     if vm_cfg is None:
-        print("  No vm_config.json found — nothing to tear down.")
+        print("  No vm_config.json found -- nothing to tear down.")
         return
 
     mode = vm_cfg.get("mode", "manual")

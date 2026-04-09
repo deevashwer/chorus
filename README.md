@@ -194,3 +194,106 @@ python3 scripts/fetch_results.py table6 figure8  # fetch specific ones
 ```
 
 Downloaded `.tex` tables and `.png` figures can be opened directly.
+
+---
+
+## Android Benchmarking
+
+The paper's client-side experiments were run on an Android phone
+(Qualcomm Snapdragon 8 Gen 3 processor, 8 cores, 8 GB RAM, 3000 mAh
+battery). The following instructions describe how to cross-compile and
+run the benchmarks on an Android device.
+
+### Prerequisites
+
+You need:
+- A host machine (Linux or macOS) with the Chorus repo built
+- An Android device connected via USB with **USB debugging** enabled
+  in Developer Options
+- The benchmark state directories generated on the server (see the
+  main setup instructions above)
+
+### Android NDK Setup
+
+[Download](https://developer.android.com/ndk/downloads) the suitable
+NDK package for your host machine into the `chorus` directory and
+unpack it there.
+
+The following assumes the target Android device runs Android 14 with a
+64-bit ARM CPU (instruction set `aarch64`), requiring `api_level=34`
+and the `arm64-v8a` ABI.  Adjust if your device differs.
+
+> If you change the Android API level, update these files:
+> `chorus/.cargo/config.toml`, `chorus/class_group/.cargo/config.toml`,
+> `chorus/gmp-mpfr-sys/build.rs`, and `chorus/class_group/build.rs`.
+
+Set up the following environment variables:
+
+```bash
+# See https://developer.android.com/ndk/guides/abis for more options
+export ANDROID_ABI=arm64-v8a
+
+# Linux
+export ANDROID_NDK_HOME={chorus_dir}/android-ndk-*/
+export ANDROID_TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
+
+# macOS
+export ANDROID_NDK_HOME={chorus_dir}/AndroidNDK*.app/Contents/NDK/
+export ANDROID_TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin
+
+# Add the Android toolchain to the PATH
+export PATH="$ANDROID_TOOLCHAIN:$PATH"
+```
+
+### Cross-Compilation
+
+Install the Android target via rustup and build:
+
+```bash
+rustup target add aarch64-linux-android
+
+# First build class_group crate
+cd class_group; cargo build --target aarch64-linux-android --release
+
+# Then build the chorus crate
+cd chorus; cargo build --target aarch64-linux-android --release
+```
+
+Build the `secret_recovery` client benchmark binary:
+
+```bash
+cargo bench --target aarch64-linux-android --bench secret_recovery --no-run
+```
+
+This generates a binary in `target/aarch64-linux-android/release/deps/`,
+e.g. `secret_recovery-abcd`.
+
+### Deploying and Running on Android via adb
+
+Install `adb` (Android Debug Bridge):
+
+```bash
+# Linux
+sudo apt install adb
+
+# macOS
+brew install android-platform-tools
+```
+
+Transfer the benchmark binary and state directories to the device:
+
+```bash
+# Connect your Android device via USB and enable USB debugging
+adb attach
+adb push target/aarch64-linux-android/release/deps/secret_recovery-abcd /data/local/tmp
+adb push case_*_clients_* /data/local/tmp
+adb shell
+```
+
+Inside the adb shell on the Android device:
+
+```bash
+cd /data/local/tmp
+BENCHMARK_TYPE=CLIENT ./secret_recovery-abcd --bench 2>&1 | tee secret_recovery_client.log
+```
+

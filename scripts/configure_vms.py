@@ -4,9 +4,9 @@
 Run this on the control VM before running setup_eval.py.
 
 Two modes:
-  (A) GCP — auto-detect project/zone, create the compute VM with gcloud,
+  (A) GCP -- auto-detect project/zone, create the compute VM with gcloud,
       and populate vm_config.json automatically.
-  (B) Manual — you provide the compute VM's IP, SSH user, and key.
+  (B) Manual -- you provide the compute VM's IP, SSH user, and key.
 
 Usage:
     python3 ~/chorus/scripts/configure_vms.py
@@ -121,7 +121,7 @@ def _gcp_wait_for_ssh(project, zone, name, retries=30, delay=10):
         if r.returncode == 0:
             print("    SSH is ready.")
             return
-        print(f"    Attempt {i+1}/{retries} — not ready yet, retrying in {delay}s...")
+        print(f"    Attempt {i+1}/{retries} -- not ready yet, retrying in {delay}s...")
         time.sleep(delay)
     sys.exit(f"    Timed out waiting for SSH on '{name}'.")
 
@@ -312,10 +312,10 @@ def configure_manual():
 
 
 def main():
-    """Standalone entry point — reconfigure compute VM connection."""
+    """Standalone entry point -- reconfigure compute VM connection."""
     print()
     print("=" * 62)
-    print("  Chorus Evaluation — Reconfigure Compute VM")
+    print("  Chorus Evaluation -- Reconfigure Compute VM")
     print("=" * 62)
     print()
     print("  Note: setup_eval.py runs this automatically on first use.")
@@ -329,10 +329,10 @@ def main():
         print()
         print("  Choose how to set up the compute VM:")
         print()
-        print("    [1] GCP (auto) — create a compute VM in the same")
+        print("    [1] GCP (auto) -- create a compute VM in the same")
         print("        GCP project/zone using gcloud (recommended)")
         print()
-        print("    [2] Manual — provide your own compute VM's IP,")
+        print("    [2] Manual -- provide your own compute VM's IP,")
         print("        SSH user, and key (any cloud or bare metal)")
         print()
         try:
@@ -340,7 +340,7 @@ def main():
         except (EOFError, KeyboardInterrupt):
             sys.exit("\n  Cancelled.")
     else:
-        print("  This machine is not a GCP VM — using manual configuration.")
+        print("  This machine is not a GCP VM -- using manual configuration.")
         choice = "2"
 
     if choice == "1":

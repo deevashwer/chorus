@@ -2,7 +2,7 @@
 """Interactive experiment runner for Chorus artifact evaluation.
 
 Run this on the control VM after setup_eval.py has completed.
-Best used inside a screen/tmux session — that way long-running
+Best used inside a screen/tmux session -- that way long-running
 experiments survive disconnections.
 
 Usage:
@@ -75,7 +75,7 @@ def _port_is_reachable(ip: str, port: int, timeout: float = 3.0) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Helpers — timing
+# Helpers -- timing
 # ---------------------------------------------------------------------------
 
 def fmt_elapsed(seconds: float) -> str:
@@ -98,11 +98,11 @@ class timed:
         return self
     def __exit__(self, *_):
         self.elapsed = time.time() - self.t0
-        print(f"\n  ⏱  {self.label}: {fmt_elapsed(self.elapsed)}")
+        print(f"\n  [time] {self.label}: {fmt_elapsed(self.elapsed)}")
 
 
 # ---------------------------------------------------------------------------
-# Helpers — running commands
+# Helpers -- running commands
 # ---------------------------------------------------------------------------
 
 def run_local(cmd, *, cwd=None, log_path=None, env_extra=None):
@@ -140,7 +140,7 @@ def scp_from_compute(cfg, remote_path, local_path):
 
 
 # ---------------------------------------------------------------------------
-# Locking — prevents two evaluators from running experiments at the same time
+# Locking -- prevents two evaluators from running experiments at the same time
 # ---------------------------------------------------------------------------
 
 def pid_alive(pid: int) -> bool:
@@ -184,7 +184,7 @@ def release_lock():
 
 
 # ---------------------------------------------------------------------------
-# Timings — remembers how long past runs took
+# Timings -- remembers how long past runs took
 # ---------------------------------------------------------------------------
 
 def load_timings() -> dict:
@@ -211,7 +211,7 @@ def expected_duration_str(exp: dict, timings: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Existing-results detection (log files only — plots are cheap to regenerate)
+# Existing-results detection (log files only -- plots are cheap to regenerate)
 # ---------------------------------------------------------------------------
 
 _EXP_CONFIG_KEY = {
@@ -297,9 +297,9 @@ def prompt_rerun(exp: dict) -> str:
         print(f"        {log_name:40s}  ({size:,} bytes)")
     print()
     print("  Options:")
-    print("    [u] Use existing logs — skip benchmarks, just re-generate")
+    print("    [u] Use existing logs -- skip benchmarks, just re-generate")
     print("    [r] Re-run benchmarks from scratch")
-    print("    [s] Skip — do nothing")
+    print("    [s] Skip -- do nothing")
     print()
     try:
         answer = input("  Choice [u/r/s]: ").strip().lower()
@@ -350,7 +350,7 @@ def ensure_local_build():
     r = subprocess.run(["bash", "-lc", "command -v cargo"],
                        capture_output=True, text=True)
     if r.returncode != 0:
-        print("    Rust not found on control VM — installing deps...")
+        print("    Rust not found on control VM -- installing deps...")
         run_local(["bash", "scripts/setup_deps.sh"], cwd=REPO_DIR)
 
     print("    Building on control VM (if needed)...")
@@ -445,7 +445,7 @@ def apply_network_limit(cfg: dict):
 
     print()
     print("  " + "=" * 58)
-    print(f"  ⚠  APPLYING NETWORK LIMITS between VMs")
+    print(f"  [!]  APPLYING NETWORK LIMITS between VMs")
     print(f"      Bandwidth : {bw} Mbps")
     print(f"      RTT       : {rtt} ms  ({delay} ms each direction)")
     print(f"      Control VM interface : {local_iface}")
@@ -471,7 +471,7 @@ def apply_network_limit(cfg: dict):
                 f"sudo tc qdisc add dev {remote_iface} parent 1: tbf "
                 f"rate {bw}mbit burst 32kbit latency 400ms")
 
-    print("      ✓ Network limits applied on both VMs.")
+    print("      [OK] Network limits applied on both VMs.")
     print()
 
 
@@ -492,7 +492,7 @@ def remove_network_limit(cfg: dict):
 
     print()
     print("  " + "=" * 58)
-    print("  ⚠  NETWORK LIMITS REMOVED on both VMs")
+    print("  [!]  NETWORK LIMITS REMOVED on both VMs")
     print("  " + "=" * 58)
     print()
 
@@ -559,8 +559,8 @@ def start_server_on_compute(cfg: dict):
                            check=False, capture=True)
         for line in diag.stdout.strip().splitlines():
             print(f"      {line}")
-        raise RuntimeError("Server failed to start — see log above.")
-    print("    ✓ Server is listening.")
+        raise RuntimeError("Server failed to start -- see log above.")
+    print("    [OK] Server is listening.")
 
 
 def stop_server_on_compute(cfg: dict):
@@ -572,7 +572,7 @@ def stop_server_on_compute(cfg: dict):
                     f"fuser -k {port}/tcp 2>/dev/null; "
                     f"rm -f /tmp/chorus_server.pid /tmp/chorus_server.log || true",
                     check=False)
-        print("    ✓ Server stopped on compute VM.")
+        print("    [OK] Server stopped on compute VM.")
     except Exception:
         pass
 
@@ -591,11 +591,11 @@ def copy_state_dirs(cfg: dict):
                "-C", str(REPO_DIR)])
     run_local(["rm", "-f", "/tmp/chorus_case_dirs.tar.gz"])
     _ssh_remote(cfg, "rm -f /tmp/chorus_case_dirs.tar.gz")
-    print("    ✓ State directories copied.")
+    print("    [OK] State directories copied.")
 
 
 # ---------------------------------------------------------------------------
-# Experiment: Figure 5 — saVSS vs cgVSS
+# Experiment: Figure 5 -- saVSS vs cgVSS
 # ---------------------------------------------------------------------------
 
 def run_figure5(cfg: dict, exp_dir: Path,
@@ -613,7 +613,7 @@ def run_figure5(cfg: dict, exp_dir: Path,
             src = reuse_from / step["log"]
             dst = exp_dir / step["log"]
             shutil.copy2(src, dst)
-            print(f"    ✓ {step['log']}")
+            print(f"    [OK] {step['log']}")
     else:
         compute_steps = [s for s in steps if s["vm"] == "compute"]
         control_steps = [s for s in steps if s["vm"] == "control"]
@@ -669,7 +669,7 @@ def run_figure5(cfg: dict, exp_dir: Path,
 
 
 # ---------------------------------------------------------------------------
-# Experiment: Secret Recovery — split into server-only and client runners
+# Experiment: Secret Recovery -- split into server-only and client runners
 # ---------------------------------------------------------------------------
 
 def _run_sr_server_benchmark(cfg: dict, exp_dir: Path):
@@ -780,7 +780,7 @@ def make_sr_runner(generate_target: str):
             server_log = log_dir / "secret_recovery_server.log"
             if not _log_is_complete(server_log):
                 if server_log.exists():
-                    print(f"  Server log incomplete (missing canary) — re-running.")
+                    print(f"  Server log incomplete (missing canary) -- re-running.")
                     server_log.unlink()
                 _run_sr_server_benchmark(cfg, log_dir)
 
@@ -788,7 +788,7 @@ def make_sr_runner(generate_target: str):
                 client_log = log_dir / "secret_recovery_client.log"
                 if not _log_is_complete(client_log):
                     if client_log.exists():
-                        print(f"  Client log incomplete (missing canary) — re-running.")
+                        print(f"  Client log incomplete (missing canary) -- re-running.")
                         client_log.unlink()
                     _run_sr_client_benchmark(cfg, log_dir)
 
@@ -815,7 +815,7 @@ def make_sr_runner(generate_target: str):
 
 
 # ---------------------------------------------------------------------------
-# Experiment: Table 10 — Parameter selection (pure computation, no benchmarks)
+# Experiment: Table 10 -- Parameter selection (pure computation, no benchmarks)
 # ---------------------------------------------------------------------------
 
 def run_table10(cfg: dict, exp_dir: Path,
@@ -950,7 +950,7 @@ def print_menu(timings: dict):
     for i, exp in enumerate(EXPERIMENTS, 1):
         dur = expected_duration_str(exp, timings)
         done = find_existing_logs(exp["id"])
-        status = "  ✅ logs exist" if done else ""
+        status = "  [DONE] logs exist" if done else ""
         print(f"    {i}. [{exp['id']}]  {exp['description']}{status}")
         print(f"       Expected duration: {dur}")
     print()
@@ -1124,7 +1124,7 @@ def main():
 
     action = prompt_rerun(exp)
     if action == "skip":
-        print("  Skipping — nothing changed.")
+        print("  Skipping -- nothing changed.")
         return
 
     reuse_from = None

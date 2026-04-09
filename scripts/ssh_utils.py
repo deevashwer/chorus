@@ -85,14 +85,14 @@ def ssh_cmd_raw(cfg: dict, command: str, *, check=True, capture=False):
 def scp_to(cfg: dict, local_path: str, remote_path: str):
     """Copy a file from the local machine to the remote host."""
     cmd = _scp_base(cfg) + [str(local_path), f"{_target(cfg)}:{remote_path}"]
-    print(f"    $ scp → {cfg['host']}:{remote_path}")
+    print(f"    $ scp -> {cfg['host']}:{remote_path}")
     subprocess.run(cmd, check=True)
 
 
 def scp_from(cfg: dict, remote_path: str, local_path: str):
     """Copy a file from the remote host to the local machine."""
     cmd = _scp_base(cfg) + [f"{_target(cfg)}:{remote_path}", str(local_path)]
-    print(f"    $ scp ← {cfg['host']}:{remote_path}")
+    print(f"    $ scp <- {cfg['host']}:{remote_path}")
     subprocess.run(cmd, check=True)
 
 
@@ -104,7 +104,7 @@ def wait_for_ssh(cfg: dict, retries: int = 30, delay: int = 10):
         if r.returncode == 0:
             print("    SSH is ready.")
             return
-        print(f"    Attempt {i + 1}/{retries} — not ready yet, retrying in {delay}s...")
+        print(f"    Attempt {i + 1}/{retries} -- not ready yet, retrying in {delay}s...")
         import time
         time.sleep(delay)
     sys.exit(f"    Timed out waiting for SSH on {cfg['host']}.")

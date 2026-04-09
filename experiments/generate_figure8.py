@@ -58,7 +58,7 @@ def generate(client_stats, server_stats, output_dir):
         breakdown[n] = stat
 
     if not breakdown:
-        print("  WARNING: No data for Figure 8 — skipping.")
+        print("  WARNING: No data for Figure 8 -- skipping.")
         return
 
     categories = list(breakdown[n_values[0]].keys())

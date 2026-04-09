@@ -7,7 +7,7 @@ screen session.
 
 Each local machine gets its own screen session, so you can disconnect
 at any time and re-run this script later to resume exactly where you
-left off — running experiments continue in the background.
+left off -- running experiments continue in the background.
 
 Usage:
     python3 scripts/login.py
@@ -28,7 +28,7 @@ CONFIG_FILE = REPO_DIR / "control_vm.json"
 def banner():
     print()
     print("=" * 62)
-    print("  Chorus Artifact Evaluation — Login")
+    print("  Chorus Artifact Evaluation -- Login")
     print("=" * 62)
     print()
     print("  This script syncs the repo to the control VM and opens")
@@ -317,7 +317,7 @@ def main():
     ensure_prerequisites(cfg)
 
     if repo_exists_on_remote(cfg):
-        print("  Repo already exists on control VM — skipping sync.")
+        print("  Repo already exists on control VM -- skipping sync.")
         print("  (To force a re-sync, delete ~/chorus on the control VM.)")
         print()
     else:
