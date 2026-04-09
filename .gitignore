@@ -1,6 +1,9 @@
 # Build outputs
 target/
 
+# Claude Code
+CLAUDE.md
+
 # macOS
 .DS_Store
 
